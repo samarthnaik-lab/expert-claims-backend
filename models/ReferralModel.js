@@ -7,7 +7,13 @@ class ReferralModel {
     
     const { data, error, count } = await supabase
       .from('cases')
-      .select('*', { count: 'exact' })
+      .select(`
+        *,
+        case_types(*),
+        customers(*),
+        partners!cases_referring_partner_id_fkey(*),
+        partner_bonus_calculations(*)
+      `, { count: 'exact' })
       .eq('referring_partner_id', partnerId)
       .order('referral_date', { ascending: false })
       .range(offset, offset + size - 1);
@@ -19,7 +25,13 @@ class ReferralModel {
   static async findAllByPartnerId(partnerId) {
     const { data, error } = await supabase
       .from('cases')
-      .select('*')
+      .select(`
+        *,
+        case_types(*),
+        customers(*),
+        partners!cases_referring_partner_id_fkey(*),
+        partner_bonus_calculations(*)
+      `)
       .eq('referring_partner_id', partnerId)
       .order('referral_date', { ascending: false });
 

@@ -39,6 +39,7 @@ class IdGenerator {
   }
 
   // Generate backlog_id using backlog_code_counters
+  // Format: ECSI-GA-YY-XXX (e.g., ECSI-GA-25-026) - matches assignment ID format
   static async generateBacklogId() {
     const currentYear = new Date().getFullYear() % 100;
     
@@ -70,8 +71,8 @@ class IdGenerator {
         .eq('yy', currentYear);
     }
 
-    // Format: BLG-YY-XXX (e.g., BLG-25-001)
-    const backlogId = `BLG-${currentYear.toString().padStart(2, '0')}-${nextNum.toString().padStart(3, '0')}`;
+    // Format: ECSI-GA-YY-XXX (e.g., ECSI-GA-25-026) - matches assignment ID format
+    const backlogId = `ECSI-GA-${currentYear.toString().padStart(2, '0')}-${nextNum.toString().padStart(3, '0')}`;
     return backlogId;
   }
 }

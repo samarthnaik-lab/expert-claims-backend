@@ -1,34 +1,15 @@
 import multer from 'multer';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import fs from 'fs';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Ensure uploads directory exists
-const uploadsDir = path.join(__dirname, '..', 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-// Configure storage
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir); // Directory where files will be stored
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
+// Use memory storage instead of disk storage
+// Files will be uploaded directly to Supabase Storage, not saved locally
+const storage = multer.memoryStorage();
 
 // File filter (optional - allow all files for now)
 const fileFilter = (req, file, cb) => {
   cb(null, true);
 };
 
-// Create multer instance
+// Create multer instance with memory storage
 const upload = multer({
   storage: storage,
   fileFilter: fileFilter,

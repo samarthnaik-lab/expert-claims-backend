@@ -2,8 +2,8 @@ import supabase from '../config/database.js';
 
 class BonusModel {
   // Get all bonus calculations for a partner with case and customer info
-  static async getBonusCalculations(partnerId) {
-    const { data, error } = await supabase
+  static async getBonusCalculations(partnerId, page = null, size = null) {
+    let query = supabase
       .from('partner_bonus_calculations')
       .select(`
         *,
@@ -26,11 +26,18 @@ class BonusModel {
             last_name
           )
         )
-      `)
+      `, page && size ? { count: 'exact' } : {})
       .eq('partner_id', partnerId)
       .order('calculation_date', { ascending: false });
 
-    return { data, error };
+    // Apply pagination if page and size are provided and size is not 10000
+    if (page && size && parseInt(size) !== 10000) {
+      const offset = (parseInt(page) - 1) * parseInt(size);
+      query = query.range(offset, offset + parseInt(size) - 1);
+    }
+
+    const result = await query;
+    return { data: result.data, error: result.error, count: result.count };
   }
 
   // Calculate total bonus amount
