@@ -1,0 +1,680 @@
+create table public.admin (
+  admin_id bigint not null,
+  user_id bigint null,
+  first_name character varying null,
+  last_name character varying null,
+  mobile_number text null,
+  emergency_contact text null,
+  gender text null,
+  age bigint null,
+  address text null,
+  created_at timestamp with time zone null,
+  updated_at timestamp with time zone null,
+  constraint admin_pkey primary key (admin_id),
+  constraint admin_user_id_fkey foreign KEY (user_id) references users (user_id)
+) TABLESPACE pg_default;
+
+
+admin table 
+
+
+
+create table public.backlog (
+  backlog_int_id bigint null,
+  case_summary character varying null,
+  case_description text null,
+  case_type_id bigint null,
+  backlog_referring_partner_id bigint null,
+  backlog_referral_date text null,
+  created_time timestamp with time zone null,
+  created_by bigint null,
+  updated_by text null,
+  updated_time timestamp with time zone null,
+  deleted_flag boolean null,
+  backlog_id text not null,
+  assigned_to bigint null,
+  status text null,
+  assigned_consultant_name text null,
+  expert_description text null,
+  feedback text null,
+  constraint backlog_pkey primary key (backlog_id),
+  constraint backlog_assigned_to_fkey foreign KEY (assigned_to) references employees (employee_id),
+  constraint backlog_backlog_referring_partner_id_fkey foreign KEY (backlog_referring_partner_id) references partners (partner_id),
+  constraint backlog_case_type_id_fkey foreign KEY (case_type_id) references case_typ (case_type_id)
+) TABLESPACE pg_default;
+
+backlog table
+
+
+
+create table public.backlog_code_counters (
+  yy bigint not null,
+  last_num bigint null,
+  constraint backlog_code_counters_pkey primary key (yy)
+) TABLESPACE pg_default;
+
+
+
+backlog_code_counters
+
+
+
+
+
+create table public.backlog_comments (
+  backlog_commentid bigint not null,
+  backlog_id text null,
+  comment_text text null,
+  created_by bigint null,
+  updated_by bigint null,
+  created_time timestamp with time zone null,
+  updated_time timestamp with time zone null,
+  createdby_name text null,
+  updatedby_name text null,
+  department text null,
+  constraint backlog_comments_pkey primary key (backlog_commentid),
+  constraint backlog_comments_backlog_id_fkey foreign KEY (backlog_id) references backlog (backlog_id)
+) TABLESPACE pg_default;
+
+
+backlog_comments
+
+
+
+create table public.backlog_documents (
+  document_id bigint not null,
+  category_id bigint null,
+  original_filename text null,
+  stored_filename text null,
+  file_path text null,
+  file_size text null,
+  file_type text null,
+  mime_type text null,
+  checksum text null,
+  version_number bigint null,
+  uploaded_by bigint null,
+  upload_time timestamp with time zone null,
+  last_accessed_time text null,
+  access_count text null,
+  is_customer_visible boolean null,
+  is_active boolean null,
+  deleted_flag boolean null,
+  backlog_id text null,
+  constraint backlog_documents_pkey primary key (document_id),
+  constraint backlog_documents_backlog_id_fkey foreign KEY (backlog_id) references backlog (backlog_id),
+  constraint backlog_documents_category_id_fkey foreign KEY (category_id) references document_categories (category_id),
+  constraint backlog_documents_uploaded_by_fkey foreign KEY (uploaded_by) references users (user_id)
+) TABLESPACE pg_default;
+
+
+backlog_documents
+
+
+
+create table public.case_code_counters (
+  yy bigint not null,
+  last_num bigint null,
+  constraint case_code_counters_pkey primary key (yy)
+) TABLESPACE pg_default;
+
+
+case_code_counters
+
+
+
+
+create table public.case_comments (
+  comment_id bigint not null,
+  case_id text null,
+  user_id bigint null,
+  comment_text text null,
+  is_internal boolean null,
+  parent_comment_id bigint null,
+  created_time timestamp with time zone null,
+  updated_time timestamp with time zone null,
+  constraint case_comments_pkey primary key (comment_id),
+  constraint case_comments_case_id_fkey foreign KEY (case_id) references cases (case_id),
+  constraint case_comments_parent_comment_id_fkey foreign KEY (parent_comment_id) references case_comments (comment_id),
+  constraint case_comments_user_id_fkey foreign KEY (user_id) references users (user_id)
+) TABLESPACE pg_default;
+
+
+case_comments
+
+
+create table public.case_documents (
+  document_id bigint not null,
+  case_id text null,
+  category_id bigint null,
+  original_filename text null,
+  stored_filename text null,
+  file_path text null,
+  file_size bigint null,
+  file_type text null,
+  mime_type text null,
+  checksum text null,
+  version_number bigint null,
+  uploaded_by bigint null,
+  upload_time timestamp with time zone null,
+  last_accessed_time text null,
+  access_count bigint null,
+  is_customer_visible boolean null,
+  is_active boolean null,
+  deleted_flag boolean null,
+  constraint case_documents_pkey primary key (document_id),
+  constraint case_documents_case_id_fkey foreign KEY (case_id) references cases (case_id),
+  constraint case_documents_category_id_fkey foreign KEY (category_id) references document_categories (category_id),
+  constraint case_documents_uploaded_by_fkey foreign KEY (uploaded_by) references users (user_id)
+) TABLESPACE pg_default;
+
+
+case_documents
+
+
+
+create table public.case_payment_phases (
+  case_phase_id bigint not null,
+  case_id text null,
+  phase_name text null,
+  case_type_id bigint null,
+  phase_amount bigint null,
+  due_date text null,
+  status text null,
+  paid_amount bigint null,
+  payment_date text null,
+  payment_method text null,
+  transaction_reference text null,
+  invoice_number text null,
+  notes text null,
+  created_by bigint null,
+  created_time text null,
+  updated_by bigint null,
+  updated_time text null,
+  constraint case_payment_phases_pkey primary key (case_phase_id),
+  constraint case_payment_phases_case_id_fkey foreign KEY (case_id) references cases (case_id),
+  constraint case_payment_phases_case_type_id_fkey foreign KEY (case_type_id) references case_types (case_type_id),
+  constraint case_payment_phases_created_by_fkey foreign KEY (created_by) references users (user_id),
+  constraint case_payment_phases_updated_by_fkey foreign KEY (updated_by) references users (user_id)
+) TABLESPACE pg_default;
+
+
+case_payment_phases
+
+
+
+create table public.case_stage_history (
+  stage_history_id bigint not null,
+  case_id text null,
+  previous_stage text null,
+  new_stage text null,
+  changed_by bigint null,
+  changed_to bigint null,
+  changed_reason text null,
+  created_time timestamp with time zone null,
+  created_by bigint null,
+  deleted_flag boolean null,
+  constraint case_stage_history_pkey primary key (stage_history_id),
+  constraint case_stage_history_case_id_fkey foreign KEY (case_id) references cases (case_id),
+  constraint case_stage_history_changed_by_fkey foreign KEY (changed_by) references users (user_id),
+  constraint case_stage_history_changed_to_fkey foreign KEY (changed_to) references employees (employee_id),
+  constraint case_stage_history_created_by_fkey foreign KEY (created_by) references users (user_id)
+) TABLESPACE pg_default;
+
+case_stage_history
+
+
+create table public.case_stakeholders (
+  stakeholder_id bigint not null,
+  case_id text null,
+  stakeholder_name text null,
+  contact_email text null,
+  contact_phone bigint null,
+  role text null,
+  notes text null,
+  created_time timestamp with time zone null,
+  updated_by bigint null,
+  updated_time timestamp with time zone null,
+  created_by bigint null,
+  constraint case_stakeholders_pkey primary key (stakeholder_id),
+  constraint case_stakeholders_case_id_fkey foreign KEY (case_id) references cases (case_id),
+  constraint case_stakeholders_created_by_fkey foreign KEY (created_by) references users (user_id),
+  constraint case_stakeholders_updated_by_fkey foreign KEY (updated_by) references users (user_id)
+) TABLESPACE pg_default;
+
+
+case_stackholders
+
+
+create table public.case_type_bonus_structures (
+  bonus_structure_id bigint not null,
+  case_type_id bigint null,
+  base_percentage double precision null,
+  stage_bonus_rules jsonb null,
+  performance_multipliers jsonb null,
+  minimum_case_value bigint null,
+  maximum_bonus_cap bigint null,
+  calculation_trigger_stage text null,
+  requires_payment_confirmation boolean null,
+  effective_date text null,
+  expiry_date text null,
+  is_active boolean null,
+  created_by bigint null,
+  created_time text null,
+  updated_by bigint null,
+  updated_time text null,
+  constraint case_type_bonus_structures_pkey primary key (bonus_structure_id),
+  constraint case_type_bonus_structures_case_type_id_fkey foreign KEY (case_type_id) references case_typ (case_type_id),
+  constraint case_type_bonus_structures_created_by_fkey foreign KEY (created_by) references users (user_id),
+  constraint case_type_bonus_structures_updated_by_fkey foreign KEY (updated_by) references users (user_id)
+) TABLESPACE pg_default;
+
+
+case_type_bonus_structure
+
+
+
+create table public.case_type_payment_phase_templates (
+  template_id bigint not null,
+  case_type_id bigint null,
+  phase_name text null,
+  phase_sequence bigint null,
+  percentage_of_total bigint null,
+  is_mandatory boolean null,
+  description text null,
+  is_active boolean null,
+  created_by bigint null,
+  created_time text null,
+  updated_by bigint null,
+  updated_time text null,
+  constraint case_type_payment_phase_templates_pkey primary key (template_id),
+  constraint case_type_payment_phase_templates_case_type_id_fkey foreign KEY (case_type_id) references case_typ (case_type_id),
+  constraint case_type_payment_phase_templates_created_by_fkey foreign KEY (created_by) references users (user_id),
+  constraint case_type_payment_phase_templates_updated_by_fkey foreign KEY (updated_by) references users (user_id)
+) TABLESPACE pg_default;
+
+
+case_type_payment_phase_template
+
+
+create table public.case_type_stage_configurations (
+  config_id bigint not null,
+  stage_name text null,
+  is_enabled boolean null,
+  created_by bigint null,
+  created_time timestamp with time zone null,
+  updated_by bigint null,
+  updated_time timestamp with time zone null,
+  constraint case_type_stage_configurations_pkey primary key (config_id),
+  constraint case_type_stage_configurations_created_by_fkey foreign KEY (created_by) references users (user_id),
+  constraint case_type_stage_configurations_updated_by_fkey foreign KEY (updated_by) references users (user_id)
+) TABLESPACE pg_default;
+
+
+case_type_stage_configurations
+
+
+
+create table public.case_types (
+  case_type_id bigint not null,
+  case_type_name text null,
+  description text null,
+  is_commercial boolean null,
+  is_active boolean null,
+  created_by bigint null,
+  created_time timestamp with time zone null,
+  updated_by bigint null,
+  updated_time timestamp with time zone null,
+  deleted_flag boolean null,
+  constraint case_type_pkey primary key (case_type_id),
+  constraint case_type_created_by_fkey foreign KEY (created_by) references users (user_id),
+  constraint case_type_updated_by_fkey foreign KEY (updated_by) references users (user_id)
+) TABLESPACE pg_default;
+
+
+case_types
+
+
+create table public.cases (
+  case_id text not null,
+  case_summary text null,
+  case_description text null,
+  case_type_id bigint null,
+  assigned_to bigint null,
+  priority text null,
+  ticket_stage text null,
+  due_date text null,
+  resolution_summary text null,
+  customer_satisfaction_rating bigint null,
+  referring_partner_id bigint null,
+  referral_date text null,
+  case_value bigint null,
+  value_currency text null,
+  referral_notes text null,
+  bonus_eligible boolean null,
+  value_confirmed bigint null,
+  value_confirmed_by bigint null,
+  value_confirmed_date text null,
+  created_time text null,
+  created_by bigint null,
+  updated_by bigint null,
+  updated_time text null,
+  deleted_flag boolean null,
+  customer_id bigint null,
+  task_type text null,
+  service_amount text null,
+  claim_amount text null,
+  constraint cases_pkey primary key (case_id),
+  constraint cases_case_type_id_fkey foreign KEY (case_type_id) references case_types (case_type_id),
+  constraint cases_created_by_fkey foreign KEY (created_by) references users (user_id),
+  constraint cases_customer_id_fkey foreign KEY (customer_id) references customers (customer_id),
+  constraint cases_referring_partner_id_fkey foreign KEY (referring_partner_id) references partners (partner_id),
+  constraint cases_updated_by_fkey foreign KEY (updated_by) references users (user_id),
+  constraint cases_assigned_to_fkey foreign KEY (assigned_to) references employees (employee_id),
+  constraint cases_value_confirmed_by_fkey foreign KEY (value_confirmed_by) references users (user_id)
+) TABLESPACE pg_default;
+
+cases
+
+
+create table public.customers (
+  customer_id bigint not null,
+  user_id bigint null,
+  first_name text null,
+  last_name text null,
+  company_name text null,
+  mobile_number text null,
+  emergency_contact text null,
+  email_address text null,
+  address text null,
+  customer_type text null,
+  source text null,
+  communication_preferences text null,
+  language_preference text null,
+  notes text null,
+  created_by bigint null,
+  created_time timestamp with time zone null,
+  updated_by bigint null,
+  updated_time timestamp with time zone null,
+  deleted_flag boolean null,
+  gender text null,
+  age text null,
+  partner_id bigint null,
+  gstin text null,
+  pan text null,
+  state text null,
+  pincode text null,
+  constraint customers_pkey primary key (customer_id),
+  constraint customers_created_by_fkey foreign KEY (created_by) references users (user_id),
+  constraint customers_partner_id_fkey foreign KEY (partner_id) references partners (partner_id),
+  constraint customers_updated_by_fkey foreign KEY (updated_by) references users (user_id),
+  constraint customers_user_id_fkey foreign KEY (user_id) references users (user_id)
+) TABLESPACE pg_default;
+
+customers
+
+
+create table public.document_categories (
+  category_id bigint not null,
+  case_type_id bigint null,
+  document_name text null,
+  is_mandatory boolean null,
+  is_active boolean null,
+  created_time timestamp with time zone null,
+  constraint document_categories_pkey primary key (category_id),
+  constraint document_categories_case_type_id_fkey foreign KEY (case_type_id) references case_types (case_type_id)
+) TABLESPACE pg_default;
+
+
+
+document_categories
+
+
+create table public.employees (
+  employee_id bigint not null,
+  user_id bigint null,
+  first_name text null,
+  last_name text null,
+  joining_date text null,
+  employment_status text null,
+  profile_picture_url text null,
+  work_phone text null,
+  work_extension bigint null,
+  mobile_number text null,
+  office_location text null,
+  address text null,
+  emergency_contact text null,
+  bank_details text null,
+  pan_number text null,
+  aadhar_number bigint null,
+  management_level text null,
+  reports_to bigint null,
+  can_approve_bonuses boolean null,
+  max_bonus_approval_limit text null,
+  team_name text null,
+  created_by text null,
+  created_time timestamp with time zone null,
+  updated_by text null,
+  updated_time timestamp with time zone null,
+  deleted_flag boolean null,
+  age text null,
+  communication preference text null,
+  additional notes text null,
+  "emergency contact Name" text null,
+  emergency contact relation text null,
+  department text null,
+  designation text null,
+  manager text null,
+  gender text null,
+  constraint employees_pkey primary key (employee_id),
+  constraint employees_reports_to_fkey foreign KEY (reports_to) references employees (employee_id),
+  constraint employees_user_id_fkey foreign KEY (user_id) references users (user_id)
+) TABLESPACE pg_default;
+
+empolyeee
+
+
+create table public.leave_applications (
+  application_id bigint not null,
+  employee_id bigint null,
+  leave_type_id bigint null,
+  start_date text null,
+  end_date text null,
+  total_days bigint null,
+  reason text null,
+  emergency_contact jsonb null,
+  status text null,
+  applied_date text null,
+  approved_by bigint null,
+  approved_date text null,
+  rejection_reason text null,
+  created_time text null,
+  updated_time text null,
+  constraint leave_applications_pkey primary key (application_id),
+  constraint leave_applications_approved_by_fkey foreign KEY (approved_by) references users (user_id),
+  constraint leave_applications_employee_id_fkey foreign KEY (employee_id) references employees (employee_id),
+  constraint leave_applications_leave_type_id_fkey foreign KEY (leave_type_id) references leave_types (leave_type_id)
+) TABLESPACE pg_default;
+
+
+leave_application
+
+create table public.leave_types (
+  leave_type_id bigint not null,
+  type_name text null,
+  description text null,
+  annual_entitlement bigint null,
+  carry_forward_allowed boolean null,
+  max_carry_forward bigint null,
+  is_active boolean null,
+  created_time timestamp with time zone null,
+  constraint leave_types_pkey primary key (leave_type_id)
+) TABLESPACE pg_default;
+
+
+leave_types
+
+
+
+create table public.partner_bonus_calculations (
+  calculation_id bigint not null,
+  partner_id bigint null,
+  case_id character varying null,
+  case_type_bonus_structure_id bigint null,
+  case_value bigint null,
+  base_bonus_amount double precision null,
+  stage_bonus_amount text null,
+  performance_multiplier bigint null,
+  performance_adjustment text null,
+  total_bonus_amount double precision null,
+  calculation_date text null,
+  calculation_trigger text null,
+  calculation_details jsonb null,
+  is_approved boolean null,
+  approved_by bigint null,
+  approved_date text null,
+  approval_notes text null,
+  calculated_by bigint null,
+  created_time text null,
+  constraint partner_bonus_calculations_pkey primary key (calculation_id),
+  constraint partner_bonus_calculations_approved_by_fkey foreign KEY (approved_by) references users (user_id),
+  constraint partner_bonus_calculations_calculated_by_fkey foreign KEY (calculated_by) references users (user_id),
+  constraint partner_bonus_calculations_case_id_fkey foreign KEY (case_id) references cases (case_id),
+  constraint partner_bonus_calculations_case_type_bonus_structure_id_fkey foreign KEY (case_type_bonus_structure_id) references case_type_bonus_structures (bonus_structure_id),
+  constraint partner_bonus_calculations_partner_id_fkey foreign KEY (partner_id) references partners (partner_id)
+) TABLESPACE pg_default;
+
+
+partner_boonus_calcuation
+
+
+create table public.partners (
+  partner_id bigint not null,
+  user_id bigint null,
+  first_name text null,
+  last_name text null,
+  mobile_number text null,
+  emergency_contact text null,
+  gender text null,
+  age bigint null,
+  address text null,
+  created_at timestamp with time zone null,
+  updated_at timestamp with time zone null,
+  created_by bigint null,
+  updated_by bigint null,
+  partner_type text null,
+  license_id text null,
+  license_expire_date text null,
+  name of entity text null,
+  deleted_flag boolean null,
+  gstin text null,
+  pan text null,
+  state text null,
+  pincode text null,
+  constraint partners_pkey primary key (partner_id),
+  constraint partners_created_by_fkey foreign KEY (created_by) references users (user_id),
+  constraint partners_updated_by_fkey foreign KEY (updated_by) references users (user_id),
+  constraint partners_user_id_fkey foreign KEY (user_id) references users (user_id)
+) TABLESPACE pg_default;
+
+partners
+
+create table public.permissions (
+  permission_id bigint not null,
+  permission_name text null,
+  permission_category text null,
+  display_name text null,
+  description text null,
+  is_system_permission boolean null,
+  is_active boolean null,
+  constraint permissions_pkey primary key (permission_id)
+) TABLESPACE pg_default;
+
+permissions
+
+create table public.role_permissions (
+  role_permission_id bigint not null,
+  role text null,
+  permission_id bigint null,
+  is_granted boolean null,
+  conditions text null,
+  created_time timestamp with time zone null,
+  constraint role_permissions_pkey primary key (role_permission_id),
+  constraint role_permissions_permission_id_fkey foreign KEY (permission_id) references permissions (permission_id)
+) TABLESPACE pg_default;
+
+role_permissions
+
+
+create table public.user_otp (
+  otp_id bigint not null,
+  user_id bigint null,
+  mobile_number text null,
+  otp_code bigint null,
+  purpose text null,
+  expires_at timestamp with time zone null,
+  used_at text null,
+  attempts text null,
+  max_attempts bigint null,
+  is_used boolean null,
+  created_by text null,
+  created_time timestamp with time zone null,
+  "requestId" text null,
+  constraint user_otp_pkey primary key (otp_id),
+  constraint user_otp_user_id_fkey foreign KEY (user_id) references users (user_id)
+) TABLESPACE pg_default;
+
+
+user_otp
+
+
+
+create table public.user_session_details (
+  session_id text not null,
+  user_id bigint null,
+  jwt_token text null,
+  remember_me_flag boolean null,
+  ip_address text null,
+  user_agent text null,
+  expires_at timestamp with time zone null,
+  last_activity timestamp with time zone null,
+  is_active boolean null,
+  created_by text null,
+  created_time timestamp with time zone null,
+  updated_by text null,
+  updated_time timestamp with time zone null,
+  deleted_flag boolean null,
+  constraint user_session_details_pkey primary key (session_id),
+  constraint user_session_details_user_id_fkey foreign KEY (user_id) references users (user_id)
+) TABLESPACE pg_default;
+
+user_sessions_details
+
+
+create table public.users (
+  user_id bigint not null,
+  username character varying null,
+  email character varying null,
+  mobile_number character varying null,
+  password_hash character varying null,
+  role public.user_role_enum null,
+  status public.user_status_enum null,
+  two_factor_enabled boolean null,
+  last_login timestamp with time zone null,
+  failed_login_attempts integer null,
+  account_locked_until timestamp without time zone null,
+  created_by bigint null,
+  created_time timestamp with time zone null,
+  updated_by bigint null,
+  updated_time timestamp with time zone null,
+  deleted_flag boolean null,
+  role_permission_id text null,
+  constraint users_pkey primary key (user_id),
+  constraint users_created_by_fkey foreign KEY (created_by) references users (user_id),
+  constraint users_updated_by_fkey foreign KEY (updated_by) references users (user_id)
+) TABLESPACE pg_default;
+
+
+users
+
+
+
