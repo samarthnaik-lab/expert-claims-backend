@@ -11,6 +11,8 @@ import BacklogCommentModel from '../models/BacklogCommentModel.js';
 import BacklogDocumentModel from '../models/BacklogDocumentModel.js';
 import IdGenerator from '../utils/idGenerator.js';
 import Validators from '../utils/validators.js';
+
+
 import supabase from '../config/database.js';
 import path from 'path';
 
@@ -195,6 +197,8 @@ class PartnerController {
   // POST /api/partner-status-check
   static async getPartnerStatusCheck(req, res) {
     try {
+
+
       const { partner_id, page, size } = req.body;
 
       if (!partner_id) {
@@ -212,6 +216,8 @@ class PartnerController {
           statusCode: 400
         });
       }
+
+
 
       console.log(`Checking partner status for partner_id: ${partner_id}, page: ${page}, size: ${size}`);
 
@@ -248,6 +254,8 @@ class PartnerController {
         });
       }
 
+
+
       // Calculate total bonus - always get total from ALL records, not just paginated ones
       // This ensures total_bonus_amount reflects all partner's bonuses
       let totalBonus = 0;
@@ -272,6 +280,8 @@ class PartnerController {
       const formattedCalculations = (calculations || []).map(calc => {
         const caseInfo = calc.cases || {};
         const customerInfo = caseInfo.customers || {};
+
+
         
         // Extract calculation_details JSONB fields
         const calcDetails = calc.calculation_details || {};
@@ -282,12 +292,16 @@ class PartnerController {
         return {
           calculation_id: calc.calculation_id,
           case_id: calc.case_id,
+
+
           stage_bonus_amount: calc.stage_bonus_amount || 0,
           case_value: calc.case_value || caseInfo.case_value || 0,
           base_bonus: calc.base_bonus_amount || 0,
           total_bonus_amount: calc.total_bonus_amount || 0,
           customer_first_name: customerInfo.first_name || null,
           customer_last_name: customerInfo.last_name || null,
+
+
           payment_date: calc.payment_date || calc.calculation_date || null,
           period: period,
           applied_rate: appliedRate,
@@ -307,17 +321,23 @@ class PartnerController {
         };
       });
 
+
+
       // Return as array to match n8n response structure
       return res.status(200).json([{
         status: 'completed',
         partner_id: String(partner_id),
         message: formattedCalculations.length > 0 ? 'Partner has bonus calculations' : 'Partner has no bonus calculations',
         data: {
+
+
           total_calculations: totalCount !== undefined ? totalCount : formattedCalculations.length,
           total_bonus_amount: totalBonus,
           calculations: formattedCalculations
         },
         timestamp: new Date().toISOString()
+
+
       }]);
     } catch (error) {
       console.error('Partner status check error:', error);
@@ -629,6 +649,8 @@ class PartnerController {
         }
       }
 
+
+
       // ============================================
       // GET case_type_id FROM FRONTEND AND VALIDATE
       // ============================================
@@ -682,6 +704,8 @@ class PartnerController {
         backlog_id: backlogId,
         case_summary: task_summary,
         case_description: case_description,
+
+
         case_type_id: resolvedCaseTypeId, // Use resolved case_type_id
         backlog_referring_partner_id: backlog_referring_partner_id ? parseInt(backlog_referring_partner_id) : partnerId,
         backlog_referral_date: backlog_referral_date || new Date().toISOString().split('T')[0],
@@ -719,8 +743,12 @@ class PartnerController {
         });
       }
 
+
+
       // Handle documents (files) - Upload to Supabase Storage instead of local filesystem
       const documentCount = document_count ? parseInt(document_count) : 0;
+
+
       let filePath = null;
       let hasDocuments = false;
       
@@ -731,8 +759,12 @@ class PartnerController {
       console.log('req.files details:', req.files?.map(f => ({ fieldname: f.fieldname, originalname: f.originalname, size: f.size })));
       
       if (documentCount > 0 && req.files && req.files.length > 0) {
+
+
         hasDocuments = true;
         const documents = [];
+        
+
         const filePaths = [];
         
         // Process uploaded files and upload to Supabase Storage
@@ -758,6 +790,8 @@ class PartnerController {
           
           const fileName = body[`document_${index}_name`] || file.originalname;
           const fileType = body[`document_${index}_type`] || file.mimetype;
+
+
           const fileTypeName = body[`document_${index}_type_name`] || 'Document';
           
           // Generate timestamp for file path (format: YYYYMMDD_HHMMSSmmm)
@@ -893,24 +927,18 @@ class PartnerController {
           
           // Step 2: Handle existing category_id
           if (categoryIdRaw) {
-            categoryId = categoryIdRaw;
-            
             // Verify it exists in document_categories table
             const { data: categoryCheck, error: categoryCheckError } = await supabase
               .from('document_categories')
               .select('category_id, document_name, case_type_id')
-              .eq('category_id', categoryId)
+              .eq('category_id', categoryIdRaw)
               .single();
             
             if (categoryCheckError || !categoryCheck) {
-              console.error(`  ✗ category_id ${categoryId} does NOT exist!`);
-              // Reset to create new one if we have a name
-              if (categoryNameToCreate) {
-                categoryId = null;
-              } else {
-                categoryId = null; // Set to null to prevent FK violation
-              }
+              console.error(`  ✗ category_id ${categoryIdRaw} does NOT exist! Will create default category.`);
+              categoryId = null; // Will be handled in Step 4
             } else {
+              categoryId = categoryCheck.category_id;
               console.log(`  ✓ Verified category_id ${categoryId} exists: "${categoryCheck.document_name}"`);
               console.log(`    case_type_id: ${categoryCheck.case_type_id}`);
             }
@@ -965,6 +993,7 @@ class PartnerController {
                 if (createError || !newCategory) {
                   console.error(`  ✗ Failed to create category:`, createError);
                   console.error(`    Category data:`, categoryData);
+                  categoryId = null; // Will be handled in Step 4
                 } else {
                   categoryId = newCategory.category_id;
                   console.log(`  ✓ Created new category with category_id: ${categoryId}`);
@@ -975,13 +1004,89 @@ class PartnerController {
             }
           }
           
-          // Step 4: Final check
+          // Step 4: FINAL CHECK - ENSURE category_id is NEVER null
+          // If still no category_id, create a default one using document_type_name or fileTypeName
           if (!categoryId) {
-            console.warn(`  ⚠ category_id is NULL - document will be saved without category`);
-          } else {
-            console.log(`  ✓ Final category_id: ${categoryId}`);
+            if (!resolvedCaseTypeId) {
+              console.error(`  ✗ CRITICAL: Cannot create default category - case_type_id is missing!`);
+              return res.status(400).json({
+                success: false,
+                message: `Document ${index + 1}: Cannot create category - case_type_id is required`,
+                statusCode: 400
+              });
+            }
+
+            // Use document_type_name, fileTypeName, or default to "General Document"
+            const defaultCategoryName = docTypeName || fileTypeName || selected_document_type_name || 'General Document';
+            
+            console.log(`  → Creating DEFAULT category: "${defaultCategoryName}" for case_type_id: ${resolvedCaseTypeId}`);
+            
+            // Check if default category already exists
+            const { data: existingDefaultCategory } = await supabase
+              .from('document_categories')
+              .select('category_id, document_name, case_type_id')
+              .eq('document_name', defaultCategoryName.trim())
+              .eq('case_type_id', resolvedCaseTypeId)
+              .single();
+            
+            if (existingDefaultCategory) {
+              categoryId = existingDefaultCategory.category_id;
+              console.log(`  ✓ Default category already exists, using category_id: ${categoryId}`);
+            } else {
+              // Get next category_id (manual auto-increment)
+              const { data: maxCategory } = await supabase
+                .from('document_categories')
+                .select('category_id')
+                .order('category_id', { ascending: false })
+                .limit(1)
+                .single();
+
+              const nextCategoryId = (maxCategory?.category_id || 0) + 1;
+
+              // Create default category
+              const defaultCategoryData = {
+                category_id: nextCategoryId,
+                case_type_id: resolvedCaseTypeId,
+                document_name: defaultCategoryName.trim(),
+                is_mandatory: false,
+                is_active: true,
+                created_time: new Date().toISOString()
+              };
+              
+              const { data: newDefaultCategory, error: createDefaultError } = await supabase
+                .from('document_categories')
+                .insert([defaultCategoryData])
+                .select()
+                .single();
+              
+              if (createDefaultError || !newDefaultCategory) {
+                console.error(`  ✗ Failed to create default category:`, createDefaultError);
+                return res.status(500).json({
+                  success: false,
+                  message: `Document ${index + 1}: Failed to create default category`,
+                  error: createDefaultError?.message || 'Unknown error',
+                  statusCode: 500
+                });
+              } else {
+                categoryId = newDefaultCategory.category_id;
+                console.log(`  ✓ Created default category with category_id: ${categoryId}`);
+                console.log(`    Category name: "${newDefaultCategory.document_name}"`);
+                console.log(`    case_type_id: ${newDefaultCategory.case_type_id}`);
+              }
+            }
           }
           
+          // Final validation - category_id MUST exist at this point
+          if (!categoryId) {
+            console.error(`  ✗ CRITICAL ERROR: category_id is still NULL after all attempts!`);
+            return res.status(500).json({
+              success: false,
+              message: `Document ${index + 1}: Failed to assign category_id - this should never happen`,
+              statusCode: 500
+            });
+          }
+          
+          console.log(`  ✓ Final category_id: ${categoryId} (GUARANTEED NOT NULL)`);
           console.log(`=== FINAL category_id for Document ${index}: ${categoryId} ===\n`);
           
           let finalUserId = userId; // Use separate variable for userId
@@ -1022,18 +1127,25 @@ class PartnerController {
 
           // Build document object matching table structure exactly
           // Store the Supabase Storage path/URL in file_path
+          // category_id is GUARANTEED to be set at this point (never null)
           const documentData = {
             backlog_id: backlogId,
-            category_id: categoryId || null,
+
+
+            category_id: categoryId, // GUARANTEED NOT NULL
             original_filename: fileName || null,
             stored_filename: `${fileTypeName}_${baseFileName}_${timestamp}${fileExt}`,
             file_path: publicUrl || null, // Store Supabase Storage URL
             file_size: file.size ? file.size.toString() : null,
             file_type: fileTypeName || fileType || null,
             mime_type: file.mimetype || null,
+
+
             uploaded_by: finalUserId || null,
             upload_time: new Date().toISOString(),
             is_active: true,
+
+
             deleted_flag: false,
             is_customer_visible: true,
             version_number: 1
@@ -1052,12 +1164,17 @@ class PartnerController {
         }
 
         if (documents.length > 0) {
+
+
           console.log('=== INSERTING DOCUMENTS INTO DATABASE ===');
           console.log('Number of documents to insert:', documents.length);
           console.log('Full documents data:', JSON.stringify(documents, null, 2));
           
           // Validate all required fields before insertion
-          const validatedDocuments = documents.map((doc, idx) => {
+          // Use for loop for async validation
+          const validatedDocuments = [];
+          for (let idx = 0; idx < documents.length; idx++) {
+            const doc = documents[idx];
             const validated = { ...doc };
             
             // Ensure backlog_id is not null (required foreign key)
@@ -1080,7 +1197,33 @@ class PartnerController {
             
             // Ensure numeric fields are numbers or null
             validated.version_number = validated.version_number || 1;
-            validated.category_id = validated.category_id || null;
+            
+            // category_id MUST NOT be null - validate it exists
+            if (!validated.category_id) {
+              console.error(`Document ${idx}: category_id is NULL - this should never happen!`);
+              return res.status(500).json({
+                success: false,
+                message: `Document ${idx + 1}: category_id is missing - cannot save document without category`,
+                statusCode: 500
+              });
+            }
+            
+            // Final validation: Verify category_id exists in document_categories
+            const { data: finalCategoryCheck } = await supabase
+              .from('document_categories')
+              .select('category_id')
+              .eq('category_id', validated.category_id)
+              .single();
+            
+            if (!finalCategoryCheck) {
+              console.error(`Document ${idx}: category_id ${validated.category_id} does NOT exist in document_categories!`);
+              return res.status(400).json({
+                success: false,
+                message: `Document ${idx + 1}: Invalid category_id ${validated.category_id} - does not exist`,
+                statusCode: 400
+              });
+            }
+            
             validated.uploaded_by = validated.uploaded_by || null;
             
             console.log(`Validated document ${idx}:`, {
@@ -1090,8 +1233,8 @@ class PartnerController {
               has_file_path: !!validated.file_path
             });
             
-            return validated;
-          });
+            validatedDocuments.push(validated);
+          }
           
           const { data: insertedDocuments, error: docError } = await BacklogDocumentModel.createMultiple(validatedDocuments);
           
@@ -1168,6 +1311,8 @@ class PartnerController {
     }
   }
 
+
+
   // GET /api/backlog_id?backlog_id=ECSI-GA-25-029
   // Get backlog data by backlog_id with all nested relationships (similar to partner-status-check)
   static async getBacklogById(req, res) {
@@ -1205,12 +1350,17 @@ class PartnerController {
         });
       }
 
-      // Return data in same format as other API endpoints
-      return res.status(200).json({
-        status: 'success',
-        message: 'Backlog data retrieved successfully',
-        data: backlogData
-      });
+      // Add partner_name from partners if exists
+      if (backlogData.partners) {
+        const firstName = backlogData.partners.first_name || '';
+        const lastName = backlogData.partners.last_name || '';
+        backlogData.partner_name = `${firstName}${lastName}`.trim() || null;
+      } else {
+        backlogData.partner_name = null;
+      }
+
+      // Return data as array (matching n8n webhook format)
+      return res.status(200).json([backlogData]);
 
     } catch (error) {
       console.error('Get backlog by ID error:', error);
@@ -1221,8 +1371,693 @@ class PartnerController {
       });
     }
   }
+
+  // GET /public/backlog_id?backlog_id=ECSI-GA-25-030 - Public endpoint for backlog view (no auth required)
+  static async publicGetBacklogById(req, res) {
+    try {
+      const { backlog_id } = req.query;
+
+      if (!backlog_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'backlog_id query parameter is required',
+          statusCode: 400
+        });
+      }
+
+      console.log(`[Public] Fetching backlog data for backlog_id: ${backlog_id}`);
+
+      // Fetch backlog with all nested relationships
+      const { data: backlogData, error } = await BacklogModel.findByBacklogId(backlog_id);
+
+      if (error) {
+        console.error('[Public] Error fetching backlog:', error);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to fetch backlog data',
+          error: error.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      if (!backlogData) {
+        return res.status(404).json({
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          statusCode: 404
+        });
+      }
+
+      // Add partner_name from partners if exists
+      if (backlogData.partners) {
+        const firstName = backlogData.partners.first_name || '';
+        const lastName = backlogData.partners.last_name || '';
+        backlogData.partner_name = `${firstName}${lastName}`.trim() || null;
+      } else {
+        backlogData.partner_name = null;
+      }
+
+      // Return data as array
+      return res.status(200).json([backlogData]);
+
+    } catch (error) {
+      console.error('[Public] Get backlog by ID error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // PATCH /public/update_backlog - Public endpoint for updating backlog (no auth required)
+  static async publicUpdateBacklog(req, res) {
+    try {
+      const { backlog_id, case_summary, case_description, case_type_id, ...otherFields } = req.body;
+
+      if (!backlog_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'backlog_id is required in request body',
+          statusCode: 400
+        });
+      }
+
+      console.log(`[Public] Updating backlog for backlog_id: ${backlog_id}`);
+
+      // Validate backlog exists
+      const { data: existingBacklog, error: fetchError } = await supabase
+        .from('backlog')
+        .select('backlog_id')
+        .eq('backlog_id', backlog_id)
+        .single();
+
+      if (fetchError || !existingBacklog) {
+        return res.status(404).json({
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          statusCode: 404
+        });
+      }
+
+      // Validate case_type_id if provided
+      if (case_type_id !== undefined && case_type_id !== null) {
+        const { data: caseTypeCheck } = await supabase
+          .from('case_types')
+          .select('case_type_id')
+          .eq('case_type_id', case_type_id)
+          .single();
+
+        if (!caseTypeCheck) {
+          return res.status(400).json({
+            status: 'error',
+            message: `Invalid case_type_id: ${case_type_id} does not exist`,
+            statusCode: 400
+          });
+        }
+      }
+
+      // Prepare update data
+      const updateData = {};
+      
+      if (case_summary !== undefined) {
+        updateData.case_summary = case_summary;
+      }
+      
+      if (case_description !== undefined) {
+        updateData.case_description = case_description;
+      }
+      
+      if (case_type_id !== undefined && case_type_id !== null) {
+        updateData.case_type_id = parseInt(case_type_id);
+      }
+
+      // Allow other fields to be updated if provided
+      const allowedFields = [
+        'status',
+        'assigned_to',
+        'assigned_consultant_name',
+        'expert_description',
+        'feedback',
+        'backlog_referral_date',
+        'updated_by'
+      ];
+
+      allowedFields.forEach(field => {
+        if (otherFields[field] !== undefined) {
+          updateData[field] = otherFields[field];
+        }
+      });
+
+      // Always update updated_time
+      updateData.updated_time = new Date().toISOString();
+
+      if (Object.keys(updateData).length === 0) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'No valid fields to update',
+          statusCode: 400
+        });
+      }
+
+      console.log(`[Public] Update data:`, updateData);
+
+      // Update backlog in database
+      const { data: updatedBacklog, error: updateError } = await BacklogModel.update(backlog_id, updateData);
+
+      if (updateError) {
+        console.error('[Public] Error updating backlog:', updateError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to update backlog',
+          error: updateError.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      // Return updated backlog data
+      return res.status(200).json({
+        status: 'success',
+        message: 'Backlog updated successfully',
+        data: updatedBacklog
+      });
+
+    } catch (error) {
+      console.error('[Public] Update backlog error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // POST /public/comments_insert - Public endpoint for inserting backlog comments (no auth required)
+  static async publicInsertComment(req, res) {
+    try {
+      const {
+        backlog_id,
+        comment_text,
+        created_by,
+        createdby_name,
+        updated_by,
+        updatedby_name,
+        department,
+        email, // Not stored in table, just for logging
+        role // Not stored in table, just for logging
+      } = req.body;
+
+      if (!backlog_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'backlog_id is required in request body',
+          statusCode: 400
+        });
+      }
+
+      if (!comment_text || comment_text.trim() === '') {
+        return res.status(400).json({
+          status: 'error',
+          message: 'comment_text is required and cannot be empty',
+          statusCode: 400
+        });
+      }
+
+      console.log(`[Public] Inserting comment for backlog_id: ${backlog_id}`);
+
+      // Validate backlog exists
+      const { data: existingBacklog, error: fetchError } = await supabase
+        .from('backlog')
+        .select('backlog_id')
+        .eq('backlog_id', backlog_id)
+        .single();
+
+      if (fetchError || !existingBacklog) {
+        return res.status(404).json({
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          statusCode: 404
+        });
+      }
+
+      // Validate created_by and updated_by if provided
+      if (created_by) {
+        const { data: userCheck } = await supabase
+          .from('users')
+          .select('user_id')
+          .eq('user_id', parseInt(created_by))
+          .single();
+
+        if (!userCheck) {
+          console.warn(`[Public] Warning: created_by ${created_by} does not exist in users table`);
+        }
+      }
+
+      if (updated_by) {
+        const { data: userCheck } = await supabase
+          .from('users')
+          .select('user_id')
+          .eq('user_id', parseInt(updated_by))
+          .single();
+
+        if (!userCheck) {
+          console.warn(`[Public] Warning: updated_by ${updated_by} does not exist in users table`);
+        }
+      }
+
+      // Prepare comment data
+      const commentData = {
+        backlog_id: backlog_id,
+        comment_text: comment_text.trim(),
+        created_by: created_by ? parseInt(created_by) : null,
+        updated_by: updated_by ? parseInt(updated_by) : null,
+        createdby_name: createdby_name || null,
+        updatedby_name: updatedby_name || null,
+        department: department || null,
+        created_time: new Date().toISOString(),
+        updated_time: new Date().toISOString()
+      };
+
+      console.log(`[Public] Comment data:`, {
+        backlog_id: commentData.backlog_id,
+        created_by: commentData.created_by,
+        department: commentData.department,
+        comment_length: commentData.comment_text.length
+      });
+
+      // Insert comment into database
+      const { data: insertedComment, error: insertError } = await BacklogCommentModel.create(commentData);
+
+      if (insertError) {
+        console.error('[Public] Error inserting comment:', insertError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to insert comment',
+          error: insertError.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      // Return success response
+      return res.status(200).json({
+        status: 'success',
+        message: 'Comment inserted successfully',
+        data: insertedComment
+      });
+
+    } catch (error) {
+      console.error('[Public] Insert comment error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // POST /public/partnerbacklogentrydoc - Public endpoint for adding document to existing backlog entry (no auth required)
+  // Accepts: multipart/form-data with document (file), backlog_id, document_type
+  static async publicAddDocumentToBacklog(req, res) {
+    try {
+      // Validate file upload
+      if (!req.file) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Document file is required',
+          statusCode: 400
+        });
+      }
+
+      const { backlog_id, document_type } = req.body;
+
+      if (!backlog_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'backlog_id is required',
+          statusCode: 400
+        });
+      }
+
+      if (!document_type) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'document_type is required',
+          statusCode: 400
+        });
+      }
+
+      console.log(`[Public] Adding document to backlog_id: ${backlog_id}`);
+      console.log(`[Public] Document type: ${document_type}`);
+      console.log(`[Public] File: ${req.file.originalname} (${req.file.size} bytes)`);
+
+      // Step 1: Get backlog to find case_type_id
+      const { data: backlogData, error: backlogError } = await supabase
+        .from('backlog')
+        .select('backlog_id, case_type_id')
+        .eq('backlog_id', backlog_id)
+        .single();
+
+      if (backlogError || !backlogData) {
+        console.error('[Public] Error fetching backlog:', backlogError);
+        return res.status(404).json({
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          statusCode: 404
+        });
+      }
+
+      if (!backlogData.case_type_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: `Backlog ${backlog_id} does not have a case_type_id`,
+          statusCode: 400
+        });
+      }
+
+      console.log(`[Public] Step 1: Found backlog, case_type_id: ${backlogData.case_type_id}`);
+
+      // Step 2: Get case_type_name to construct bucket name
+      const { data: caseTypeData, error: caseTypeError } = await supabase
+        .from('case_types')
+        .select('case_type_name')
+        .eq('case_type_id', backlogData.case_type_id)
+        .single();
+
+      if (caseTypeError || !caseTypeData) {
+        console.error('[Public] Error fetching case_type:', caseTypeError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Could not determine case type',
+          statusCode: 500
+        });
+      }
+
+      const caseTypeName = caseTypeData.case_type_name;
+      const safeCaseType = caseTypeName.trim().toLowerCase().replace(/\s+/g, '-');
+      const bucketName = `public-${safeCaseType}`;
+
+      console.log(`[Public] Step 2: Bucket name: "${bucketName}"`);
+
+      // Step 3: Get or create document category
+      let categoryId = null;
+      const { data: existingCategory } = await supabase
+        .from('document_categories')
+        .select('category_id, document_name, case_type_id')
+        .eq('document_name', document_type.trim())
+        .eq('case_type_id', backlogData.case_type_id)
+        .single();
+
+      if (existingCategory) {
+        categoryId = existingCategory.category_id;
+        console.log(`[Public] Step 3: Using existing category_id: ${categoryId}`);
+      } else {
+        // Create new category
+        const { data: maxCategory } = await supabase
+          .from('document_categories')
+          .select('category_id')
+          .order('category_id', { ascending: false })
+          .limit(1)
+          .single();
+
+        const nextCategoryId = (maxCategory?.category_id || 0) + 1;
+
+        const categoryData = {
+          category_id: nextCategoryId,
+          case_type_id: backlogData.case_type_id,
+          document_name: document_type.trim(),
+          is_mandatory: false,
+          is_active: true,
+          created_time: new Date().toISOString()
+        };
+
+        const { data: newCategory, error: createError } = await supabase
+          .from('document_categories')
+          .insert([categoryData])
+          .select()
+          .single();
+
+        if (createError || !newCategory) {
+          console.error('[Public] Error creating category:', createError);
+          return res.status(500).json({
+            status: 'error',
+            message: 'Failed to create document category',
+            error: createError?.message || 'Unknown error',
+            statusCode: 500
+          });
+        }
+
+        categoryId = newCategory.category_id;
+        console.log(`[Public] Step 3: Created new category_id: ${categoryId}`);
+      }
+
+      // Step 4: Check if bucket exists, create if it doesn't
+      console.log(`[Public] Step 4: Checking if bucket "${bucketName}" exists`);
+      
+      // Try to list buckets to check if it exists
+      const { data: buckets, error: listBucketsError } = await supabase.storage.listBuckets();
+      
+      let bucketExists = false;
+      if (!listBucketsError && buckets) {
+        bucketExists = buckets.some(bucket => bucket.name === bucketName);
+        console.log(`[Public] Bucket "${bucketName}" exists: ${bucketExists}`);
+      }
+
+      // If bucket doesn't exist, try to create it
+      if (!bucketExists) {
+        console.log(`[Public] Bucket "${bucketName}" does not exist, attempting to create...`);
+        const { data: createBucketData, error: createBucketError } = await supabase.storage.createBucket(bucketName, {
+          public: true, // Make bucket public
+          allowedMimeTypes: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'image/jpeg', 'image/png', 'text/plain', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+          fileSizeLimit: 10485760 // 10MB
+        });
+
+        if (createBucketError) {
+          console.error('[Public] Error creating bucket:', createBucketError);
+          // Try fallback bucket
+          const fallbackBucket = 'backlog-documents';
+          console.log(`[Public] Using fallback bucket: "${fallbackBucket}"`);
+          bucketName = fallbackBucket;
+        } else {
+          console.log(`[Public] ✓ Successfully created bucket: "${bucketName}"`);
+        }
+      }
+
+      // Step 5: Upload file to Supabase Storage
+      const file = req.file;
+      const fileName = file.originalname;
+      const fileExt = path.extname(fileName);
+      const baseFileName = path.basename(fileName, fileExt).replace(/[^a-zA-Z0-9]/g, '_');
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').split('.')[0];
+      
+      const storagePath = `bk-${backlog_id}/${document_type}_${baseFileName}_${timestamp}${fileExt}`;
+      
+      console.log(`[Public] Step 5: Uploading to bucket: "${bucketName}", path: "${storagePath}"`);
+
+      let publicUrl = storagePath;
+      let uploadData = null;
+      let finalBucketName = bucketName;
+      
+      const { data: uploadResult, error: uploadError } = await supabase.storage
+        .from(bucketName)
+        .upload(storagePath, file.buffer, {
+          contentType: file.mimetype || 'application/octet-stream',
+          upsert: false
+        });
+
+      if (uploadError) {
+        console.error('[Public] Error uploading file:', uploadError);
+        
+        // If bucket error, try fallback bucket
+        if (uploadError.message && (uploadError.message.includes('Bucket') || uploadError.message.includes('not found'))) {
+          const fallbackBucket = 'backlog-documents';
+          console.log(`[Public] Retrying with fallback bucket: "${fallbackBucket}"`);
+          
+          const { data: retryUploadData, error: retryUploadError } = await supabase.storage
+            .from(fallbackBucket)
+            .upload(storagePath, file.buffer, {
+              contentType: file.mimetype || 'application/octet-stream',
+              upsert: false
+            });
+
+          if (retryUploadError) {
+            return res.status(500).json({
+              status: 'error',
+              message: 'Failed to upload file to storage',
+              error: retryUploadError.message || 'Unknown error',
+              attempted_bucket: bucketName,
+              fallback_bucket: fallbackBucket,
+              statusCode: 500
+            });
+          }
+
+          // Update bucket name for URL generation
+          finalBucketName = fallbackBucket;
+          uploadData = retryUploadData;
+          console.log(`[Public] ✓ Successfully uploaded to fallback bucket: "${fallbackBucket}"`);
+        } else {
+          return res.status(500).json({
+            status: 'error',
+            message: 'Failed to upload file to storage',
+            error: uploadError.message || 'Unknown error',
+            statusCode: 500
+          });
+        }
+      } else {
+        uploadData = uploadResult;
+        console.log(`[Public] ✓ Successfully uploaded to bucket: "${bucketName}"`);
+      }
+
+      // Get public URL
+      const { data: urlData } = supabase.storage
+        .from(finalBucketName)
+        .getPublicUrl(storagePath);
+
+      if (urlData?.publicUrl) {
+        publicUrl = urlData.publicUrl;
+      }
+
+      console.log(`[Public] Step 4: File uploaded successfully`);
+
+      // Step 5: Get next document_id
+      const { data: maxDoc } = await supabase
+        .from('backlog_documents')
+        .select('document_id')
+        .order('document_id', { ascending: false })
+        .limit(1)
+        .single();
+
+      const nextDocumentId = (maxDoc?.document_id || 0) + 1;
+
+      // Step 6: Insert document into backlog_documents table
+      const documentData = {
+        document_id: nextDocumentId,
+        backlog_id: backlog_id,
+        category_id: categoryId,
+        original_filename: fileName,
+        stored_filename: `${document_type}_${baseFileName}_${timestamp}${fileExt}`,
+        file_path: publicUrl,
+        file_size: file.size ? file.size.toString() : null,
+        file_type: document_type,
+        mime_type: file.mimetype || null,
+        uploaded_by: null, // Can be added if needed
+        upload_time: new Date().toISOString(),
+        is_active: true,
+        deleted_flag: false,
+        is_customer_visible: true,
+        version_number: 1
+      };
+
+      const { data: insertedDocument, error: insertError } = await supabase
+        .from('backlog_documents')
+        .insert([documentData])
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('[Public] Error inserting document:', insertError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to save document to database',
+          error: insertError.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      console.log(`[Public] Step 5: Document saved with document_id: ${insertedDocument.document_id}`);
+
+      // Return success response
+      return res.status(200).json({
+        status: 'success',
+        message: 'Document added successfully',
+        data: {
+          document_id: insertedDocument.document_id,
+          backlog_id: backlog_id,
+          file_path: publicUrl
+        }
+      });
+
+    } catch (error) {
+      console.error('[Public] Add document error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // GET /public/MyReferral?partner_id={partner_id}&page={page}&size={size} - Public endpoint for getting partner referrals (no auth required)
+  static async publicGetReferrals(req, res) {
+    try {
+      const { partner_id, page, size } = req.query;
+
+      if (!partner_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'partner_id parameter is required',
+          statusCode: 400
+        });
+      }
+
+      if (!Validators.isValidPartnerId(partner_id)) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Invalid partner_id',
+          statusCode: 400
+        });
+      }
+
+      console.log(`[Public] Fetching referrals for partner_id: ${partner_id}, page: ${page}, size: ${size}`);
+
+      // If size=10000 or page/size not provided, return all referrals
+      const sizeNum = size ? parseInt(size) : null;
+      if (!page && !size || sizeNum === 10000) {
+        // Return all referrals
+        const { data: referrals, error } = await ReferralModel.findAllByPartnerId(partner_id);
+
+        if (error) {
+          console.error('[Public] Database error:', error);
+          return res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch referrals',
+            statusCode: 500
+          });
+        }
+
+        return res.status(200).json(referrals || []);
+      } else {
+        // Use pagination
+        const pagination = Validators.validatePagination(page, size);
+        const { data: referrals, error, count } = await ReferralModel.findByPartnerId(
+          partner_id,
+          pagination.page,
+          pagination.size
+        );
+
+        if (error) {
+          console.error('[Public] Database error:', error);
+          return res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch referrals',
+            statusCode: 500
+          });
+        }
+
+        return res.status(200).json(referrals || []);
+      }
+    } catch (error) {
+      console.error('[Public] Get referrals error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error',
+        statusCode: 500
+      });
+    }
+  }
 }
 
 export default PartnerController;
+
+
 
 

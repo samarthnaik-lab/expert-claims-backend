@@ -3,6 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import authRoutes from './routes/authRoutes.js';
 import partnerRoutes from './routes/partnerRoutes.js';
+import publicRoutes from './routes/publicRoutes.js';
 
 dotenv.config();
 
@@ -28,7 +29,10 @@ app.get('/', (req, res) => {
   res.json({ message: 'chale chhe' });
 });
 
-// API routes
+// Public routes (no authentication required)
+app.use('/public', publicRoutes);
+
+// API routes (authentication required)
 app.use('/api', authRoutes);
 app.use('/api', partnerRoutes);
 

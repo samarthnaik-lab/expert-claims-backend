@@ -1,8 +1,33 @@
 import supabase from '../config/database.js';
 
 class BacklogModel {
+  // Get next backlog_int_id by finding max and incrementing
+  static async getNextBacklogIntId() {
+    const { data, error } = await supabase
+      .from('backlog')
+      .select('backlog_int_id')
+      .not('backlog_int_id', 'is', null) // Only count non-null values
+      .order('backlog_int_id', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error && error.code !== 'PGRST116') { // PGRST116 = no rows returned
+      console.error('Error getting max backlog_int_id:', error);
+      return 1; // Default to 1 if error
+    }
+
+    const maxId = data?.backlog_int_id || 0;
+    return maxId + 1;
+  }
+
   // Create a backlog entry
   static async create(backlogData) {
+    // Generate backlog_int_id if not provided (auto-increment pattern)
+    if (!backlogData.backlog_int_id) {
+      backlogData.backlog_int_id = await this.getNextBacklogIntId();
+      console.log(`Generated backlog_int_id: ${backlogData.backlog_int_id}`);
+    }
+
     const { data, error } = await supabase
       .from('backlog')
       .insert([backlogData])
@@ -100,64 +125,46 @@ class BacklogModel {
       data.backlog_comments = [];
     }
 
-    // 5. Get backlog_documents with nested relationships
+    // 5. Get backlog_documents (without nested relationships for now - simpler structure)
     const { data: documents, error: documentsError } = await supabase
       .from('backlog_documents')
       .select('*')
       .eq('backlog_id', backlogId)
       .order('upload_time', { ascending: false });
 
-    if (!documentsError && documents && documents.length > 0) {
-      // For each document, fetch document_categories and users separately
-      const documentsWithRelations = await Promise.all(
-        documents.map(async (doc) => {
-          const docWithRelations = { ...doc };
-
-          // Get document_categories
-          if (doc.category_id) {
-            const { data: category, error: categoryError } = await supabase
-              .from('document_categories')
-              .select('*')
-              .eq('category_id', doc.category_id)
-              .single();
-
-            if (!categoryError && category) {
-              docWithRelations.document_categories = category;
-            } else {
-              docWithRelations.document_categories = null;
-            }
-          } else {
-            docWithRelations.document_categories = null;
-          }
-
-          // Get users (uploaded_by)
-          if (doc.uploaded_by) {
-            const { data: user, error: userError } = await supabase
-              .from('users')
-              .select('*')
-              .eq('user_id', doc.uploaded_by)
-              .single();
-
-            if (!userError && user) {
-              docWithRelations.users = user;
-            } else {
-              docWithRelations.users = null;
-            }
-          } else {
-            docWithRelations.users = null;
-          }
-
-          return docWithRelations;
-        })
-      );
-
-      data.backlog_documents = documentsWithRelations;
+    if (!documentsError && documents) {
+      // Convert file_size from text to number if possible, keep as is otherwise
+      data.backlog_documents = documents.map(doc => ({
+        ...doc,
+        file_size: doc.file_size ? (isNaN(parseInt(doc.file_size)) ? doc.file_size : parseInt(doc.file_size)) : null,
+        access_count: doc.access_count ? (isNaN(parseInt(doc.access_count)) ? doc.access_count : parseInt(doc.access_count)) : 0
+      }));
     } else if (documentsError) {
       console.error('Error fetching backlog_documents:', documentsError);
       data.backlog_documents = [];
     } else {
       data.backlog_documents = [];
     }
+
+    return { data, error };
+  }
+
+  // Update backlog by backlog_id
+  static async update(backlogId, updateData) {
+    // Remove backlog_id from updateData if present (can't update primary key)
+    const { backlog_id, ...dataToUpdate } = updateData;
+    
+    // Add updated_time if not provided
+    if (!dataToUpdate.updated_time) {
+      dataToUpdate.updated_time = new Date().toISOString();
+    }
+
+    const { data, error } = await supabase
+      .from('backlog')
+      .update(dataToUpdate)
+      .eq('backlog_id', backlogId)
+      .select()
+      .single();
 
     return { data, error };
   }
