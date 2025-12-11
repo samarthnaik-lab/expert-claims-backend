@@ -126,10 +126,12 @@ class BacklogModel {
     }
 
     // 5. Get backlog_documents (without nested relationships for now - simpler structure)
+    // Filter out deleted documents (deleted_flag = false or null)
     const { data: documents, error: documentsError } = await supabase
       .from('backlog_documents')
       .select('*')
       .eq('backlog_id', backlogId)
+      .or('deleted_flag.is.null,deleted_flag.eq.false')
       .order('upload_time', { ascending: false });
 
     if (!documentsError && documents) {
@@ -216,11 +218,12 @@ class BacklogModel {
               .then(({ data, error }) => ({ data: data || [], error }))
               .catch(() => ({ data: [], error: null })),
 
-            // 5. Get backlog_documents
+            // 5. Get backlog_documents (filter out deleted documents)
             supabase
               .from('backlog_documents')
               .select('*')
               .eq('backlog_id', backlog.backlog_id)
+              .or('deleted_flag.is.null,deleted_flag.eq.false')
               .order('upload_time', { ascending: false })
               .then(({ data, error }) => ({ 
                 data: (data || []).map(doc => ({

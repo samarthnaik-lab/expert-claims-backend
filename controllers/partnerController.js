@@ -2079,6 +2079,66 @@ class PartnerController {
     }
   }
 
+  // PATCH /public/removedocument?document_id={document_id} - Remove document (soft delete - set deleted_flag to true)
+  static async publicRemoveDocument(req, res) {
+    try {
+      const { document_id } = req.query;
+
+      if (!document_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'document_id query parameter is required',
+          statusCode: 400
+        });
+      }
+
+      console.log(`[Public] Removing document: document_id=${document_id}`);
+
+      // Update deleted_flag to true (soft delete)
+      const { data: updatedDocument, error: updateError } = await supabase
+        .from('backlog_documents')
+        .update({ 
+          deleted_flag: true
+        })
+        .eq('document_id', document_id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('[Public] Error updating document:', updateError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to remove document',
+          error: updateError.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      if (!updatedDocument) {
+        return res.status(404).json({
+          status: 'error',
+          message: `Document with ID ${document_id} not found`,
+          statusCode: 404
+        });
+      }
+
+      console.log(`[Public] Document ${document_id} marked as deleted (deleted_flag=true)`);
+
+      return res.status(200).json([{
+        status: 'success',
+        message: 'Deleted document successfully'
+      }]);
+
+    } catch (error) {
+      console.error('[Public] Remove document error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
   // GET /public/MyReferral?partner_id={partner_id}&page={page}&size={size} - Public endpoint for getting partner referrals (no auth required)
   static async publicGetReferrals(req, res) {
     try {

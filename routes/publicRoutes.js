@@ -20,5 +20,8 @@ router.post('/comments_insert', PartnerController.publicInsertComment);
 // POST /public/partnerbacklogentrydoc - Add document to existing backlog entry
 router.post('/partnerbacklogentrydoc', uploadSingleFile, PartnerController.publicAddDocumentToBacklog);
 
+// PATCH /public/removedocument?document_id={document_id} - Remove document (soft delete)
+router.patch('/removedocument', PartnerController.publicRemoveDocument);
+
 export default router;
 

@@ -470,53 +470,97 @@ class SupportController {
       // Step 5: Extract file path
       let storagePath = document.file_path;
       
+      console.log(`[View Document] Original file_path: ${storagePath}`);
+      
       // If it's a full URL, extract just the path
       if (storagePath && storagePath.includes('/storage/v1/object/public/')) {
         const parts = storagePath.split('/storage/v1/object/public/');
         if (parts.length > 1) {
           const pathParts = parts[1].split('/');
-          storagePath = pathParts.slice(1).join('/');
+          // Remove bucket name (first part) and keep the rest
+          if (pathParts.length > 1) {
+            storagePath = pathParts.slice(1).join('/');
+          } else {
+            storagePath = parts[1];
+          }
+        }
+      } else if (storagePath && storagePath.startsWith('bk-')) {
+        // Already in correct format: bk-ECSI-GA-25-086/filename.pdf
+        storagePath = storagePath;
+      } else if (storagePath && storagePath.includes(bucketName + '/')) {
+        // If path contains bucket name, remove it
+        storagePath = storagePath.split(bucketName + '/')[1] || storagePath;
+      }
+
+      console.log(`[View Document] Extracted storage path: ${storagePath}`);
+
+      // Step 6: Download file from storage - try multiple buckets
+      const bucketVariations = [
+        bucketName, // expc-{case_type_name}
+        `public-${caseType.case_type_name.trim().toLowerCase().replace(/\s+/g, '-')}`, // public-{case_type_name}
+        'backlog-documents', // Fallback bucket
+        'public-fire' // Common bucket
+      ];
+
+      let fileData = null;
+      let downloadError = null;
+      let usedBucket = null;
+
+      for (const bucket of bucketVariations) {
+        console.log(`[View Document] Trying bucket: ${bucket}`);
+        const { data, error } = await supabase.storage
+          .from(bucket)
+          .download(storagePath);
+
+        if (!error && data) {
+          fileData = data;
+          usedBucket = bucket;
+          console.log(`[View Document] ✓ File found in bucket: ${bucket}`);
+          break;
+        } else {
+          console.log(`[View Document] ✗ Not found in bucket: ${bucket}, error: ${error?.message}`);
+          downloadError = error;
         }
       }
 
-      console.log(`[View Document] Storage path: ${storagePath}`);
-
-      // Step 6: Download file from storage
-      const { data: fileData, error: downloadError } = await supabase.storage
-        .from(bucketName)
-        .download(storagePath);
-
-      if (downloadError || !fileData) {
-        console.error('[View Document] Download error:', downloadError);
-        // Try fallback bucket
-        const { data: fallbackData, error: fallbackError } = await supabase.storage
-          .from('backlog-documents')
-          .download(storagePath);
-
-        if (fallbackError || !fallbackData) {
-          return res.status(500).json({
-            success: false,
-            error: 'File not found in storage'
-          });
-        }
-
-        const arrayBuffer = await fallbackData.arrayBuffer();
-        const buffer = Buffer.from(arrayBuffer);
-        const ext = path.extname(storagePath).toLowerCase();
-        const contentType = ext === '.pdf' ? 'application/pdf' : 'application/octet-stream';
-        
-        res.setHeader('Content-Type', contentType);
-        res.setHeader('Content-Disposition', `inline; filename="${path.basename(storagePath)}"`);
-        return res.send(buffer);
+      if (!fileData) {
+        console.error('[View Document] File not found in any bucket');
+        console.error('[View Document] Tried buckets:', bucketVariations);
+        console.error('[View Document] Storage path:', storagePath);
+        return res.status(500).json({
+          success: false,
+          error: 'File not found in storage',
+          details: {
+            tried_buckets: bucketVariations,
+            storage_path: storagePath,
+            case_type_name: caseType.case_type_name
+          }
+        });
       }
 
       // Step 7: Return file
       const arrayBuffer = await fileData.arrayBuffer();
       const buffer = Buffer.from(arrayBuffer);
       const ext = path.extname(storagePath).toLowerCase();
-      const contentType = ext === '.pdf' ? 'application/pdf' : 'application/octet-stream';
+      
+      // Determine Content-Type based on file extension
+      // Supported: PDF, DOC, DOCX, JPG, PNG, TXT
+      const contentTypeMap = {
+        '.pdf': 'application/pdf',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.doc': 'application/msword',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.txt': 'text/plain',
+        '.xls': 'application/vnd.ms-excel',
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      };
+      const contentType = contentTypeMap[ext] || 'application/octet-stream';
 
-      console.log(`[View Document] Returning file: ${buffer.length} bytes, type: ${contentType}`);
+      console.log(`[View Document] Returning file: ${buffer.length} bytes, type: ${contentType}, extension: ${ext}`);
 
       res.setHeader('Content-Type', contentType);
       res.setHeader('Content-Disposition', `inline; filename="${path.basename(storagePath)}"`);
