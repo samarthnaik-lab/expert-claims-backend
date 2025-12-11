@@ -19,12 +19,12 @@ class SupportController {
         });
       }
 
-      // Validate employee_id is a valid number
+      // Validate employee_id is a valid number (allow 0 to get all backlog entries)
       const employeeIdNum = parseInt(employee_id);
-      if (isNaN(employeeIdNum) || employeeIdNum <= 0) {
+      if (isNaN(employeeIdNum) || employeeIdNum < 0) {
         return res.status(400).json({
           status: 'error',
-          message: 'employee_id must be a valid positive number',
+          message: 'employee_id must be a valid number (0 or positive)',
           statusCode: 400
         });
       }
@@ -109,6 +109,91 @@ class SupportController {
 
     } catch (error) {
       console.error('[Support Team] Get backlog by ID error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // PATCH /support/updatecunsultantpolicy
+  // Support Team endpoint: Update consultant assignment for a backlog entry
+  static async updateConsultantPolicy(req, res) {
+    try {
+      const { backlog_id, assigned_consultant_name, assigned_to, updated_by, user_id } = req.body;
+
+      // Validate required fields
+      if (!backlog_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'backlog_id is required',
+          statusCode: 400
+        });
+      }
+
+      console.log(`[Support Team] Updating consultant policy for backlog_id: ${backlog_id}`);
+
+      // Prepare update data
+      const updateData = {
+        updated_time: new Date().toISOString()
+      };
+
+      // Add assigned_consultant_name if provided
+      if (assigned_consultant_name !== undefined && assigned_consultant_name !== null) {
+        updateData.assigned_consultant_name = assigned_consultant_name;
+      }
+
+      // Add assigned_to if provided (can be from assigned_to or user_id)
+      if (assigned_to !== undefined && assigned_to !== null) {
+        const assignedToNum = parseInt(assigned_to);
+        if (!isNaN(assignedToNum) && assignedToNum > 0) {
+          updateData.assigned_to = assignedToNum;
+        }
+      } else if (user_id !== undefined && user_id !== null) {
+        // Fallback to user_id if assigned_to not provided
+        const userIdNum = parseInt(user_id);
+        if (!isNaN(userIdNum) && userIdNum > 0) {
+          updateData.assigned_to = userIdNum;
+        }
+      }
+
+      // Add updated_by if provided
+      if (updated_by !== undefined && updated_by !== null) {
+        updateData.updated_by = updated_by;
+      }
+
+      // Update backlog entry
+      const { data: updatedBacklog, error } = await BacklogModel.update(backlog_id, updateData);
+
+      if (error) {
+        console.error('[Support Team] Error updating consultant policy:', error);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to update consultant policy',
+          error: error.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      if (!updatedBacklog) {
+        return res.status(404).json({
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          statusCode: 404
+        });
+      }
+
+      // Return updated backlog data
+      return res.status(200).json({
+        status: 'success',
+        message: 'Consultant policy updated successfully',
+        data: updatedBacklog,
+        statusCode: 200
+      });
+
+    } catch (error) {
+      console.error('[Support Team] Update consultant policy error:', error);
       return res.status(500).json({
         status: 'error',
         message: 'Internal server error: ' + error.message,
@@ -395,6 +480,273 @@ class SupportController {
 
     } catch (error) {
       console.error('[Support Team] Insert comment error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // GET /support/getemployees - Get all employees
+  static async getEmployees(req, res) {
+    try {
+      console.log(`[Support Team] Getting all employees`);
+
+      // Return employees
+      const { data: employees, error } = await supabase
+        .from('employees')
+        .select('employee_id, first_name, last_name, deleted_flag')
+        .eq('deleted_flag', false)
+        .order('first_name', { ascending: true })
+        .limit(10000);
+
+      if (error) {
+        console.error('[Support Team] Error fetching employees:', error);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to fetch employees',
+          error: error.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      // Format employees to match n8n webhook response format
+      const formattedEmployees = (employees || []).map(emp => ({
+        employee_id: emp.employee_id,
+        employee_name: `${emp.first_name || ''} ${emp.last_name || ''}`.trim()
+      }));
+
+      console.log(`[Support Team] Returning ${formattedEmployees.length} employees`);
+      return res.status(200).json(formattedEmployees);
+
+    } catch (error) {
+      console.error('[Support Team] Get employees error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // GET /support/case_type - Get all case types
+  static async getCaseTypes(req, res) {
+    try {
+      console.log(`[Support Team] Getting all case types`);
+
+      // Fetch all active case types (not deleted)
+      const { data: caseTypes, error, count } = await supabase
+        .from('case_types')
+        .select('case_type_id, case_type_name, deleted_flag', { count: 'exact' })
+        .or('deleted_flag.is.null,deleted_flag.eq.false') // Handle both null and false
+        .eq('is_active', true) // Only active case types
+        .order('case_type_id', { ascending: true }) // Order by ID
+        .limit(10000);
+      
+      console.log(`[Support Team] Fetched ${caseTypes ? caseTypes.length : 0} case types (total count in DB: ${count})`);
+
+      if (error) {
+        console.error('[Support Team] Error fetching case types:', error);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to fetch case types',
+          error: error.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      // Format case types to match n8n webhook response format
+      // Return only case_type_id and case_type_name
+      const formattedCaseTypes = (caseTypes || []).map(ct => ({
+        case_type_id: ct.case_type_id,
+        case_type_name: ct.case_type_name || ''
+      }));
+
+      console.log(`[Support Team] Returning ${formattedCaseTypes.length} case types`);
+      
+      // Return response wrapped in body, headers, statusCode, statusMessage format
+      return res.status(200).json({
+        body: formattedCaseTypes,
+        headers: {},
+        statusCode: 200,
+        statusMessage: "OK"
+      });
+
+    } catch (error) {
+      console.error('[Support Team] Get case types error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // GET /support/getcustomers - Get all customers
+  static async getCustomers(req, res) {
+    try {
+      console.log(`[Support Team] Getting all customers`);
+
+      // Return customers
+      const { data: customers, error, count } = await supabase
+        .from('customers')
+        .select('customer_id, first_name, last_name, company_name, deleted_flag', { count: 'exact' })
+        .or('deleted_flag.is.null,deleted_flag.eq.false')
+        .order('customer_id', { ascending: true })
+        .limit(10000);
+      
+      console.log(`[Support Team] Fetched ${customers ? customers.length : 0} customers (total count in DB: ${count})`);
+
+      if (error) {
+        console.error('[Support Team] Error fetching customers:', error);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to fetch customers',
+          error: error.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      // Format customers to match n8n webhook response format
+      const formattedCustomers = (customers || [])
+        .filter(cust => {
+          return cust.company_name || cust.first_name || cust.last_name;
+        })
+        .map(cust => {
+          let customerName = '';
+          if (cust.company_name && cust.company_name.trim()) {
+            customerName = cust.company_name.trim();
+          } else {
+            const firstName = cust.first_name || '';
+            const lastName = cust.last_name || '';
+            customerName = `${firstName} ${lastName}`.trim();
+          }
+          
+          if (!customerName) {
+            return null;
+          }
+          
+          return {
+            customer_id: cust.customer_id,
+            customer_name: customerName
+          };
+        })
+        .filter(cust => cust !== null);
+
+      console.log(`[Support Team] Returning ${formattedCustomers.length} customers`);
+      return res.status(200).json(formattedCustomers);
+
+    } catch (error) {
+      console.error('[Support Team] Get customers error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // GET /support/{uuid} - Handle UUID-based routes (for backward compatibility)
+  // Different UUIDs return different data types:
+  // - 2d7eb946-588f-436d-8ebe-ccb118babf12 → employees
+  // - 4b9270ad-fe64-49e2-a41b-a86a78e938e1 → customers
+  static async handleUuidRoute(req, res) {
+    try {
+      const { uuid } = req.params;
+      
+      console.log(`[Support Team] UUID route accessed: ${uuid}`);
+
+      // Check UUID to determine what to return
+      if (uuid === '2d7eb946-588f-436d-8ebe-ccb118babf12' || uuid === 'getemployees') {
+        // Return employees
+        const { data: employees, error } = await supabase
+          .from('employees')
+          .select('employee_id, first_name, last_name, deleted_flag')
+          .eq('deleted_flag', false)
+          .order('first_name', { ascending: true })
+          .limit(10000);
+
+        if (error) {
+          console.error('[Support Team] Error fetching employees:', error);
+          return res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch employees',
+            error: error.message || 'Unknown error',
+            statusCode: 500
+          });
+        }
+
+        // Format employees to match n8n webhook response format
+        const formattedEmployees = (employees || []).map(emp => ({
+          employee_id: emp.employee_id,
+          employee_name: `${emp.first_name || ''} ${emp.last_name || ''}`.trim()
+        }));
+
+        console.log(`[Support Team] Returning ${formattedEmployees.length} employees`);
+        return res.status(200).json(formattedEmployees);
+
+      } else if (uuid === '4b9270ad-fe64-49e2-a41b-a86a78e938e1' || uuid === 'getcustomers') {
+        // Return customers
+        const { data: customers, error, count } = await supabase
+          .from('customers')
+          .select('customer_id, first_name, last_name, company_name, deleted_flag', { count: 'exact' })
+          .or('deleted_flag.is.null,deleted_flag.eq.false')
+          .order('customer_id', { ascending: true })
+          .limit(10000);
+        
+        console.log(`[Support Team] Fetched ${customers ? customers.length : 0} customers (total count in DB: ${count})`);
+
+        if (error) {
+          console.error('[Support Team] Error fetching customers:', error);
+          return res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch customers',
+            error: error.message || 'Unknown error',
+            statusCode: 500
+          });
+        }
+
+        // Format customers to match n8n webhook response format
+        const formattedCustomers = (customers || [])
+          .filter(cust => {
+            return cust.company_name || cust.first_name || cust.last_name;
+          })
+          .map(cust => {
+            let customerName = '';
+            if (cust.company_name && cust.company_name.trim()) {
+              customerName = cust.company_name.trim();
+            } else {
+              const firstName = cust.first_name || '';
+              const lastName = cust.last_name || '';
+              customerName = `${firstName} ${lastName}`.trim();
+            }
+            
+            if (!customerName) {
+              return null;
+            }
+            
+            return {
+              customer_id: cust.customer_id,
+              customer_name: customerName
+            };
+          })
+          .filter(cust => cust !== null);
+
+        console.log(`[Support Team] Returning ${formattedCustomers.length} customers`);
+        return res.status(200).json(formattedCustomers);
+
+      } else {
+        // Unknown UUID - return error or default behavior
+        return res.status(404).json({
+          status: 'error',
+          message: `Unknown UUID route: ${uuid}`,
+          statusCode: 404
+        });
+      }
+
+    } catch (error) {
+      console.error('[Support Team] UUID route error:', error);
       return res.status(500).json({
         status: 'error',
         message: 'Internal server error: ' + error.message,

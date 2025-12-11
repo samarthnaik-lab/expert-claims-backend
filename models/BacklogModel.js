@@ -161,14 +161,30 @@ class BacklogModel {
 
   // Get all backlog entries by employee_id (assigned_to) with nested relationships
   // Used by support team to view all backlog entries assigned to a specific employee
+  // If employeeId is 0, get all unassigned backlog entries (assigned_to IS NULL)
   static async findByEmployeeId(employeeId) {
     try {
+      console.log(`[BacklogModel] Finding backlog entries for employee_id: ${employeeId}`);
+      
       // First get all backlog entries assigned to this employee
-      let { data: backlogList, error } = await supabase
+      // If employeeId is 0, get ALL backlog entries (no filter on assigned_to)
+      let query = supabase
         .from('backlog')
-        .select('*')
-        .eq('assigned_to', employeeId)
-        .order('created_time', { ascending: false });
+        .select('*');
+      
+      if (employeeId === 0) {
+        // Get ALL backlog entries (no filter on assigned_to)
+        console.log('[BacklogModel] Fetching ALL backlog entries (employee_id=0 means no filter)');
+        // Don't add any filter - get all backlog entries
+      } else {
+        // Get backlog entries assigned to specific employee
+        console.log(`[BacklogModel] Fetching backlog entries assigned to employee_id: ${employeeId}`);
+        query = query.eq('assigned_to', employeeId);
+      }
+      
+      const { data: backlogList, error } = await query.order('created_time', { ascending: false });
+      
+      console.log(`[BacklogModel] Found ${backlogList ? backlogList.length : 0} backlog entries`);
 
       if (error) {
         console.error('Error fetching backlog by employee_id:', error);

@@ -33,6 +33,9 @@ router.post('/partnerbacklogentry', uploadMultipleFiles, PartnerController.creat
 // POST /api/createTask
 router.post('/createTask', PartnerController.createTask);
 
+// PATCH /api/feedback - Update feedback for backlog entry
+router.patch('/feedback', PartnerController.updateFeedback);
+
 // POST /api/{uuid} - Support UUID routes for createTask (like n8n webhooks)
 // This allows routes like /api/e4d7117c-66bb-4750-91d0-6462389b2fba to work
 // Must be after all specific routes to avoid conflicts

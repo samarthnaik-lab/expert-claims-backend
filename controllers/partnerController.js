@@ -2139,6 +2139,75 @@ class PartnerController {
     }
   }
 
+  // PATCH /api/feedback - Update feedback for a backlog entry
+  static async updateFeedback(req, res) {
+    try {
+      const { backlog_id, feedback } = req.body;
+
+      // Validate required fields
+      if (!backlog_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'backlog_id is required',
+          statusCode: 400
+        });
+      }
+
+      if (feedback === undefined || feedback === null) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'feedback is required',
+          statusCode: 400
+        });
+      }
+
+      console.log(`[Partner] Updating feedback for backlog_id: ${backlog_id}`);
+
+      // Prepare update data
+      const updateData = {
+        feedback: feedback,
+        updated_time: new Date().toISOString()
+      };
+
+      // Update backlog entry
+      const { data: updatedBacklog, error } = await BacklogModel.update(backlog_id, updateData);
+
+      if (error) {
+        console.error('[Partner] Error updating feedback:', error);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to update feedback',
+          error: error.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      if (!updatedBacklog) {
+        return res.status(404).json({
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          statusCode: 404
+        });
+      }
+
+      // Return updated backlog data
+      return res.status(200).json({
+        status: 'success',
+        message: 'Feedback updated successfully',
+        data: updatedBacklog,
+        statusCode: 200
+      });
+
+    } catch (error) {
+      console.error('[Partner] Update feedback error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
   // GET /public/MyReferral?partner_id={partner_id}&page={page}&size={size} - Public endpoint for getting partner referrals (no auth required)
   static async publicGetReferrals(req, res) {
     try {
