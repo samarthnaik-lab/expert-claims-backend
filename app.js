@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import authRoutes from './routes/authRoutes.js';
 import partnerRoutes from './routes/partnerRoutes.js';
 import publicRoutes from './routes/publicRoutes.js';
+import supportRoutes from './routes/supportRoutes.js';
 
 dotenv.config();
 
@@ -31,6 +32,9 @@ app.get('/', (req, res) => {
 
 // Public routes (no authentication required)
 app.use('/public', publicRoutes);
+
+// Support Team routes
+app.use('/support', supportRoutes);
 
 // API routes (authentication required)
 app.use('/api', authRoutes);

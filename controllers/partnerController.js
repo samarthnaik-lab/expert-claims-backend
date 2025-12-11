@@ -752,11 +752,63 @@ class PartnerController {
       let filePath = null;
       let hasDocuments = false;
       
+      // Get case_type_name to construct dynamic bucket name (matching n8n workflow)
+      let caseTypeName = null;
+      let bucketName = 'backlog-documents'; // Fallback bucket
+      
+      if (resolvedCaseTypeId) {
+        const { data: caseTypeData } = await supabase
+          .from('case_types')
+          .select('case_type_name')
+          .eq('case_type_id', resolvedCaseTypeId)
+          .single();
+        
+        if (caseTypeData) {
+          caseTypeName = caseTypeData.case_type_name;
+          console.log(`✓ Found case_type_name: "${caseTypeName}"`);
+          
+          // Construct bucket name: expc-{case_type_name} (matching n8n workflow)
+          const safeCaseType = caseTypeName
+            .trim()
+            .toLowerCase()
+            .replace(/\s+/g, '-');
+          bucketName = `expc-${safeCaseType}`;
+          console.log(`✓ Using dynamic bucket: "${bucketName}"`);
+        }
+      }
+      
+      // Check if bucket exists, create if not
+      const { data: buckets, error: listBucketsError } = await supabase.storage.listBuckets();
+      let bucketExists = false;
+      if (!listBucketsError && buckets) {
+        bucketExists = buckets.some(bucket => bucket.name === bucketName);
+        console.log(`Bucket "${bucketName}" exists: ${bucketExists}`);
+      }
+      
+      // Create bucket if it doesn't exist
+      if (!bucketExists) {
+        console.log(`Bucket "${bucketName}" does not exist, attempting to create...`);
+        const { data: createBucketData, error: createBucketError } = await supabase.storage.createBucket(bucketName, {
+          public: true,
+          allowedMimeTypes: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'image/jpeg', 'image/png', 'text/plain', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+          fileSizeLimit: 10485760 // 10MB
+        });
+        
+        if (createBucketError) {
+          console.error('Error creating bucket:', createBucketError);
+          console.log(`Using fallback bucket: "backlog-documents"`);
+          bucketName = 'backlog-documents';
+        } else {
+          console.log(`✓ Successfully created bucket: "${bucketName}"`);
+        }
+      }
+      
       console.log('=== DOCUMENT UPLOAD DEBUG ===');
       console.log('document_count:', document_count);
       console.log('documentCount (parsed):', documentCount);
       console.log('req.files:', req.files ? `Array with ${req.files.length} files` : 'null/undefined');
       console.log('req.files details:', req.files?.map(f => ({ fieldname: f.fieldname, originalname: f.originalname, size: f.size })));
+      console.log(`Final bucket name: "${bucketName}"`);
       
       if (documentCount > 0 && req.files && req.files.length > 0) {
 
@@ -814,13 +866,20 @@ class PartnerController {
           
           try {
             console.log(`Attempting to upload file ${index} to Supabase Storage...`);
-            console.log(`Bucket: backlog-documents, Path: ${storagePath}, Size: ${file.buffer.length} bytes`);
+            console.log(`Bucket: ${bucketName}, Path: ${storagePath}, Size: ${file.buffer.length} bytes`);
+            console.log(`File buffer type: ${typeof file.buffer}, is Buffer: ${Buffer.isBuffer(file.buffer)}`);
+            
+            // Ensure we have a valid buffer
+            if (!file.buffer || file.buffer.length === 0) {
+              throw new Error('File buffer is empty or invalid');
+            }
             
             const { data: uploadData, error: uploadError } = await supabase.storage
-              .from('backlog-documents')
+              .from(bucketName)
               .upload(storagePath, file.buffer, {
                 contentType: file.mimetype || 'application/octet-stream',
-                upsert: false
+                upsert: false,
+                cacheControl: '3600'
               });
             
             if (uploadError) {
@@ -831,10 +890,39 @@ class PartnerController {
               console.error('Error error:', uploadError.error);
               console.error('Full error details:', JSON.stringify(uploadError, null, 2));
               
-              // Still save document record even if Storage upload fails
-              // Use storage path as file_path
-              publicUrl = storagePath;
-              console.log(`Will save document with path: ${publicUrl}`);
+              // Try fallback bucket if main bucket fails
+              if (uploadError.message && (uploadError.message.includes('Bucket') || uploadError.message.includes('not found'))) {
+                const fallbackBucket = 'backlog-documents';
+                console.log(`[Partner] Retrying with fallback bucket: "${fallbackBucket}"`);
+                
+                const { data: retryUploadData, error: retryUploadError } = await supabase.storage
+                  .from(fallbackBucket)
+                  .upload(storagePath, file.buffer, {
+                    contentType: file.mimetype || 'application/octet-stream',
+                    upsert: false,
+                    cacheControl: '3600'
+                  });
+                
+                if (!retryUploadError && retryUploadData) {
+                  uploadSuccess = true;
+                  console.log(`✓ File ${index} uploaded successfully to fallback bucket: "${fallbackBucket}"`);
+                  const { data: urlData } = supabase.storage
+                    .from(fallbackBucket)
+                    .getPublicUrl(storagePath);
+                  if (urlData?.publicUrl) {
+                    publicUrl = urlData.publicUrl;
+                    console.log(`Public URL: ${urlData.publicUrl}`);
+                  } else {
+                    publicUrl = storagePath;
+                  }
+                } else {
+                  console.error(`[Partner] Fallback bucket also failed:`, retryUploadError);
+                  throw new Error(`File upload failed: ${retryUploadError?.message || 'Unknown error'}`);
+                }
+              } else {
+                // For other errors, throw to prevent saving invalid record
+                throw new Error(`File upload failed: ${uploadError.message || 'Unknown error'}`);
+              }
             } else {
               uploadSuccess = true;
               console.log(`✓ File ${index} uploaded successfully to Storage`);
@@ -842,7 +930,7 @@ class PartnerController {
               
               // Get public URL for the uploaded file
               const { data: urlData } = supabase.storage
-                .from('backlog-documents')
+                .from(bucketName)
                 .getPublicUrl(storagePath);
               
               console.log('URL data:', urlData);
@@ -850,6 +938,11 @@ class PartnerController {
               if (urlData?.publicUrl) {
                 publicUrl = urlData.publicUrl;
                 console.log(`Public URL: ${publicUrl}`);
+              } else {
+                // If no public URL, construct it manually
+                const projectUrl = process.env.SUPABASE_URL?.replace('/rest/v1', '') || '';
+                publicUrl = `${projectUrl}/storage/v1/object/public/${bucketName}/${storagePath}`;
+                console.log(`Constructed public URL: ${publicUrl}`);
               }
             }
           } catch (storageError) {
@@ -857,8 +950,8 @@ class PartnerController {
             console.error('Exception:', storageError);
             console.error('Exception message:', storageError.message);
             console.error('Exception stack:', storageError.stack);
-            // Continue with database insert even if Storage fails
-            publicUrl = storagePath;
+            // Don't continue - throw error to prevent saving invalid record
+            throw new Error(`File upload failed: ${storageError.message || 'Unknown error'}`);
           }
           
           // Build file path for response: bk-{backlog_id}/{document_type_name}_{original_filename}_{timestamp}.{ext}
