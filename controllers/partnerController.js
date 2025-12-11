@@ -1285,7 +1285,7 @@ class PartnerController {
             
             // Ensure boolean fields are boolean
             validated.is_active = validated.is_active === true;
-            validated.deleted_flag = validated.deleted_flag === false;
+            validated.deleted_flag = false; // Always set to false for new documents
             validated.is_customer_visible = validated.is_customer_visible === true;
             
             // Ensure numeric fields are numbers or null

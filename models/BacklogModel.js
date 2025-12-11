@@ -126,25 +126,33 @@ class BacklogModel {
     }
 
     // 5. Get backlog_documents (without nested relationships for now - simpler structure)
-    // Filter out deleted documents (deleted_flag = false or null)
+    // Filter out deleted documents (only show where deleted_flag is NOT true)
+    console.log(`[BacklogModel] Fetching documents for backlog_id: ${backlogId}`);
     const { data: documents, error: documentsError } = await supabase
       .from('backlog_documents')
       .select('*')
       .eq('backlog_id', backlogId)
-      .or('deleted_flag.is.null,deleted_flag.eq.false')
       .order('upload_time', { ascending: false });
+    
+    console.log(`[BacklogModel] Documents fetched: ${documents ? documents.length : 0} documents`);
+    if (documents && documents.length > 0) {
+      console.log(`[BacklogModel] Sample document deleted_flag values:`, documents.map(d => ({ doc_id: d.document_id, deleted_flag: d.deleted_flag })));
+    }
+    
+    // Filter out deleted documents in JavaScript (more reliable)
+    const activeDocuments = documents ? documents.filter(doc => doc.deleted_flag !== true) : [];
+    console.log(`[BacklogModel] Active documents after filtering: ${activeDocuments.length}`);
 
-    if (!documentsError && documents) {
+    if (!documentsError) {
       // Convert file_size from text to number if possible, keep as is otherwise
-      data.backlog_documents = documents.map(doc => ({
+      data.backlog_documents = activeDocuments.map(doc => ({
         ...doc,
         file_size: doc.file_size ? (isNaN(parseInt(doc.file_size)) ? doc.file_size : parseInt(doc.file_size)) : null,
         access_count: doc.access_count ? (isNaN(parseInt(doc.access_count)) ? doc.access_count : parseInt(doc.access_count)) : 0
       }));
-    } else if (documentsError) {
-      console.error('Error fetching backlog_documents:', documentsError);
-      data.backlog_documents = [];
+      console.log(`[BacklogModel] Final backlog_documents count: ${data.backlog_documents.length}`);
     } else {
+      console.error('[BacklogModel] Error fetching backlog_documents:', documentsError);
       data.backlog_documents = [];
     }
 
@@ -223,16 +231,19 @@ class BacklogModel {
               .from('backlog_documents')
               .select('*')
               .eq('backlog_id', backlog.backlog_id)
-              .or('deleted_flag.is.null,deleted_flag.eq.false')
               .order('upload_time', { ascending: false })
-              .then(({ data, error }) => ({ 
-                data: (data || []).map(doc => ({
-                  ...doc,
-                  file_size: doc.file_size ? (isNaN(parseInt(doc.file_size)) ? doc.file_size : parseInt(doc.file_size)) : null,
-                  access_count: doc.access_count ? (isNaN(parseInt(doc.access_count)) ? doc.access_count : parseInt(doc.access_count)) : 0
-                })),
-                error 
-              }))
+              .then(({ data, error }) => {
+                // Filter out deleted documents in JavaScript (more reliable)
+                const activeDocs = (data || []).filter(doc => doc.deleted_flag !== true);
+                return { 
+                  data: activeDocs.map(doc => ({
+                    ...doc,
+                    file_size: doc.file_size ? (isNaN(parseInt(doc.file_size)) ? doc.file_size : parseInt(doc.file_size)) : null,
+                    access_count: doc.access_count ? (isNaN(parseInt(doc.access_count)) ? doc.access_count : parseInt(doc.access_count)) : 0
+                  })),
+                  error 
+                };
+              })
               .catch(() => ({ data: [], error: null }))
           ]);
 
