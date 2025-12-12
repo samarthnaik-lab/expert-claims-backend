@@ -49,5 +49,20 @@ export const uploadSingleFile = (req, res, next) => {
   });
 };
 
+// Middleware for handling single file upload (field name: "data")
+export const uploadDataFile = (req, res, next) => {
+  upload.single('data')(req, res, (err) => {
+    if (err) {
+      console.error('Multer error:', err);
+      return res.status(400).json({
+        success: false,
+        message: 'File upload error: ' + err.message,
+        statusCode: 400
+      });
+    }
+    next();
+  });
+};
+
 export default upload;
 

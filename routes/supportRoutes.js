@@ -1,11 +1,18 @@
 import express from 'express';
 import SupportController from '../controllers/supportController.js';
+import { uploadDataFile } from '../middleware/uploadMiddleware.js';
 
 const router = express.Router();
 
 // Support Team Routes
 // GET /support/get_all_backlog_data?employee_id={employee_id} - Get all backlog data assigned to an employee
 router.get('/get_all_backlog_data', SupportController.getAllBacklogData);
+
+// GET /support/getemployedashboard?employee_id={employee_id} - Get employee dashboard data
+router.get('/getemployedashboard', SupportController.getEmployeeDashboard);
+
+// GET /support/getemployeetasks?employee_id={employee_id}&page={page}&size={size} - Get employee tasks with pagination
+router.get('/getemployeetasks', SupportController.getEmployeeTasks);
 
 // GET /support/backlog_id?backlog_id={backlog_id} - Get backlog details by ID
 router.get('/backlog_id', SupportController.getBacklogById);
@@ -33,6 +40,15 @@ router.get('/getcustomers', SupportController.getCustomers);
 
 // GET /support/case_type - Get all case types
 router.get('/case_type', SupportController.getCaseTypes);
+
+// GET /support/getpartner - Get all partners
+router.get('/getpartner', SupportController.getPartners);
+
+// GET /support/getdocumentcategories?case_type_id={case_type_id} - Get document categories by case type
+router.get('/getdocumentcategories', SupportController.getDocumentCategories);
+
+// POST /support/upload - Upload document for a case
+router.post('/upload', uploadDataFile, SupportController.uploadDocument);
 
 // GET /support/{uuid} - Support UUID routes (like n8n webhooks) - for backward compatibility
 // This allows routes like /support/2d7eb946-588f-436d-8ebe-ccb118babf12 to work

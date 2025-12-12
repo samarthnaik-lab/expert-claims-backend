@@ -11,8 +11,6 @@ import BacklogCommentModel from '../models/BacklogCommentModel.js';
 import BacklogDocumentModel from '../models/BacklogDocumentModel.js';
 import IdGenerator from '../utils/idGenerator.js';
 import Validators from '../utils/validators.js';
-
-
 import supabase from '../config/database.js';
 import path from 'path';
 
@@ -412,68 +410,131 @@ class PartnerController {
         comments,
         internal,
         payments,
+        partner_id,
+        referring_partner_id,
+        referral_date,
+        case_value,
+        service_amount,
+        claim_amount,
         updatedby_name,
         createdby_name
       } = req.body;
 
       const userId = req.user?.user_id;
-      // Get partner_id from partners table by user_id
+      
+      // Use referring_partner_id from payload, or fallback to partner_id, or get from user
       let partnerId = null;
-      if (userId) {
+      if (referring_partner_id) {
+        partnerId = parseInt(referring_partner_id);
+      } else if (partner_id) {
+        partnerId = parseInt(partner_id);
+      } else if (userId) {
         const { data: partner } = await PartnerModel.findByUserId(userId);
         partnerId = partner?.partner_id || null;
       }
       
       if (!partnerId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Partner not found for this user',
-          statusCode: 400
-        });
+        return res.status(400).json([{
+          message: 'Partner not found',
+          case_id: null
+        }]);
       }
 
       if (!case_Summary || !case_description) {
-        return res.status(400).json({
-          success: false,
+        return res.status(400).json([{
           message: 'case_Summary and case_description are required',
-          statusCode: 400
-        });
+          case_id: null
+        }]);
       }
 
       // Generate case_id
       const caseId = await IdGenerator.generateCaseId();
 
-      // Create or find customer
+      // Handle customer - update existing or create new
       let customerId = null;
-      if (customer && customer.firstName && customer.lastName) {
-        const { data: existingCustomer } = await CustomerModel.findByName(
-          customer.firstName,
-          customer.lastName,
-          partnerId
-        );
-
-        if (existingCustomer) {
-          customerId = existingCustomer.customer_id;
-        } else {
-          // Create new customer
-          const { data: newCustomer, error: customerError } = await CustomerModel.create({
-            first_name: customer.firstName,
-            last_name: customer.lastName,
+      let customerCreated = false;
+      
+      if (customer) {
+        // If customer_id exists, update the customer
+        if (customer.customer_id) {
+          customerId = parseInt(customer.customer_id);
+          
+          // Update existing customer with new data
+          const customerUpdateData = {
+            first_name: customer.firstName || null,
+            last_name: customer.lastName || null,
+            email_address: customer.email || null,
+            mobile_number: customer.mobileNumber || null,
+            emergency_contact: customer.emergencyContact || null,
+            gender: customer.gender || null,
+            age: customer.age ? String(customer.age) : null,
+            address: customer.address || null,
+            customer_type: customer.customerType || null,
+            communication_preferences: customer.communicationPreference || null,
+            source: customer.source || null,
+            language_preference: customer.languagePreference || null,
+            notes: customer.notes || null,
             partner_id: partnerId,
-            created_by: userId,
-            created_time: new Date().toISOString(),
-            deleted_flag: false
+            updated_by: userId,
+            updated_time: new Date().toISOString()
+          };
+
+          // Remove null/undefined values
+          Object.keys(customerUpdateData).forEach(key => {
+            if (customerUpdateData[key] === null || customerUpdateData[key] === undefined || customerUpdateData[key] === '') {
+              delete customerUpdateData[key];
+            }
           });
 
-          if (!customerError && newCustomer) {
-            customerId = newCustomer.customer_id;
+          if (Object.keys(customerUpdateData).length > 0) {
+            await CustomerModel.update(customerId, customerUpdateData);
+          }
+        } else if (customer.firstName && customer.lastName) {
+          // Create new customer
+          const { data: existingCustomer } = await CustomerModel.findByName(
+            customer.firstName,
+            customer.lastName,
+            partnerId
+          );
+
+          if (existingCustomer) {
+            customerId = existingCustomer.customer_id;
+          } else {
+            const { data: newCustomer, error: customerError } = await CustomerModel.create({
+              first_name: customer.firstName,
+              last_name: customer.lastName,
+              email_address: customer.email || null,
+              mobile_number: customer.mobileNumber || null,
+              emergency_contact: customer.emergencyContact || null,
+              gender: customer.gender || null,
+              age: customer.age ? String(customer.age) : null,
+              address: customer.address || null,
+              customer_type: customer.customerType || null,
+              communication_preferences: customer.communicationPreference || null,
+              source: customer.source || null,
+              language_preference: customer.languagePreference || null,
+              notes: customer.notes || null,
+              partner_id: partnerId,
+              created_by: userId,
+              created_time: new Date().toISOString(),
+              deleted_flag: false
+            });
+
+            if (!customerError && newCustomer) {
+              customerId = newCustomer.customer_id;
+              customerCreated = true;
+            }
           }
         }
       }
 
-      // Get case_type_id from caseType (assuming caseType is name, need to query case_types table)
-      // For now, assuming caseType is already the ID
+      // Get case_type_id from caseType
       const caseTypeId = caseType ? parseInt(caseType) : null;
+
+      // Parse amounts
+      const parsedCaseValue = case_value ? parseInt(case_value) : null;
+      const parsedServiceAmount = service_amount ? String(service_amount) : null;
+      const parsedClaimAmount = claim_amount ? String(claim_amount) : null;
 
       // Create case
       const caseData = {
@@ -486,7 +547,10 @@ class PartnerController {
         ticket_stage: ticket_Stage || 'created',
         due_date: dueDate || null,
         referring_partner_id: partnerId,
-        referral_date: new Date().toISOString().split('T')[0],
+        referral_date: referral_date || new Date().toISOString().split('T')[0],
+        case_value: parsedCaseValue,
+        service_amount: parsedServiceAmount,
+        claim_amount: parsedClaimAmount,
         customer_id: customerId,
         created_by: userId,
         created_time: new Date().toISOString(),
@@ -497,11 +561,43 @@ class PartnerController {
 
       if (caseError || !createdCase) {
         console.error('Error creating case:', caseError);
-        return res.status(500).json({
-          success: false,
-          message: 'Failed to create case',
-          statusCode: 500
-        });
+        console.error('Case data attempted:', JSON.stringify(caseData, null, 2));
+        
+        // Check for foreign key constraint violations
+        let errorMessage = 'Failed to create case';
+        if (caseError && caseError.message) {
+          if (caseError.message.includes('foreign key')) {
+            if (caseError.message.includes('case_type_id')) {
+              errorMessage = `Invalid case_type_id: ${caseTypeId} does not exist in case_types table`;
+            } else if (caseError.message.includes('assigned_to')) {
+              errorMessage = `Invalid assigned_to: ${assignedTo} does not exist in employees table`;
+            } else if (caseError.message.includes('referring_partner_id')) {
+              errorMessage = `Invalid referring_partner_id: ${partnerId} does not exist in partners table`;
+            } else if (caseError.message.includes('customer_id')) {
+              errorMessage = `Invalid customer_id: ${customerId} does not exist in customers table`;
+            } else if (caseError.message.includes('created_by')) {
+              errorMessage = `Invalid created_by: ${userId} does not exist in users table`;
+            } else {
+              errorMessage = `Foreign key constraint violation: ${caseError.message}`;
+            }
+          } else {
+            errorMessage = caseError.message;
+          }
+        }
+        
+        return res.status(500).json([{
+          message: errorMessage,
+          case_id: null,
+          error: caseError?.message || 'Unknown error',
+          details: {
+            case_id: caseId,
+            case_type_id: caseTypeId,
+            assigned_to: assignedTo,
+            referring_partner_id: partnerId,
+            customer_id: customerId,
+            created_by: userId
+          }
+        }]);
       }
 
       // Create stakeholders
@@ -547,18 +643,17 @@ class PartnerController {
         await PaymentModel.createMultiple(paymentsData);
       }
 
-      return res.status(200).json({
-        success: true,
-        message: 'Task created successfully',
+      // Return response in the expected format
+      return res.status(200).json([{
+        message: customerCreated ? "Customer added sucess" : "Task created successfully",
         case_id: caseId
-      });
+      }]);
     } catch (error) {
       console.error('Create task error:', error);
-      return res.status(500).json({
-        success: false,
+      return res.status(500).json([{
         message: 'Internal server error: ' + error.message,
-        statusCode: 500
-      });
+        case_id: null
+      }]);
     }
   }
 
