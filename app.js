@@ -5,6 +5,7 @@ import authRoutes from './routes/authRoutes.js';
 import partnerRoutes from './routes/partnerRoutes.js';
 import publicRoutes from './routes/publicRoutes.js';
 import supportRoutes from './routes/supportRoutes.js';
+import customerRoutes from './routes/customerRoutes.js';
 
 dotenv.config();
 
@@ -13,7 +14,20 @@ const PORT = 3000;
 
 // Middleware
 app.use(cors({
-  origin: 'http://localhost:8080',
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl, Postman, webhooks, etc.)
+    if (!origin) return callback(null, true);
+    // Allow localhost origins
+    if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
+      return callback(null, true);
+    }
+    // Allow the configured origin
+    if (origin === 'http://localhost:8080') {
+      return callback(null, true);
+    }
+    // Allow all origins for webhook endpoints
+    callback(null, true);
+  },
   credentials: true
 }));
 app.use(express.json());
@@ -35,6 +49,9 @@ app.use('/public', publicRoutes);
 
 // Support Team routes
 app.use('/support', supportRoutes);
+
+// Customer routes (new role)
+app.use('/customer', customerRoutes);
 
 // API routes (authentication required)
 app.use('/api', authRoutes);

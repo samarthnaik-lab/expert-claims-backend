@@ -50,6 +50,24 @@ router.get('/getdocumentcategories', SupportController.getDocumentCategories);
 // POST /support/upload - Upload document for a case
 router.post('/upload', uploadDataFile, SupportController.uploadDocument);
 
+// POST /support/everything-cases - Get comprehensive case data with all related information
+router.post('/everything-cases', SupportController.getEverythingCases);
+
+// POST /support/view - View case document by document_id
+router.post('/view', SupportController.viewDocument);
+
+// PATCH /support/removecrmdocument?document_id={document_id} - Soft delete a case document
+router.patch('/removecrmdocument', SupportController.removeCrmDocument);
+
+// PATCH /support/update_Task - Update a case/task with all related fields
+router.patch('/update_Task', SupportController.updateTask);
+
+// POST /support/createcasepaymentphases - Create payment phases for a case
+router.post('/createcasepaymentphases', SupportController.createCasePaymentPhases);
+
+// GET /support/getuserdetails?email={email} - Get user details by email
+router.get('/getuserdetails', SupportController.getUserDetails);
+
 // GET /support/{uuid} - Support UUID routes (like n8n webhooks) - for backward compatibility
 // This allows routes like /support/2d7eb946-588f-436d-8ebe-ccb118babf12 to work
 // Must be after all specific routes to avoid conflicts

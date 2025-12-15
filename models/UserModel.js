@@ -26,16 +26,50 @@ class UserModel {
     return { data, error };
   }
 
-  // Get user by user_id
-  static async findByUserId(userId) {
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('deleted_flag', false)
-      .single();
+  // Get user by email (any role) - includes deleted users
+  static async findByEmail(email) {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('email', email)
+        .limit(1);
 
-    return { data, error };
+      if (error) {
+        return { data: null, error };
+      }
+
+      if (data && Array.isArray(data) && data.length > 0) {
+        return { data: data[0], error: null };
+      }
+
+      return { data: null, error: null };
+    } catch (err) {
+      return { data: null, error: err };
+    }
+  }
+
+  // Get user by user_id (includes deleted users)
+  static async findByUserId(userId) {
+    try {
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('user_id', userId)
+        .limit(1);
+
+      if (error) {
+        return { data: null, error };
+      }
+
+      if (data && Array.isArray(data) && data.length > 0) {
+        return { data: data[0], error: null };
+      }
+
+      return { data: null, error: null };
+    } catch (err) {
+      return { data: null, error: err };
+    }
   }
 
   // Update last login timestamp
