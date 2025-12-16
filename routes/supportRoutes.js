@@ -1,8 +1,10 @@
 import express from 'express';
 import SupportController from '../controllers/supportController.js';
 import { uploadDataFile } from '../middleware/uploadMiddleware.js';
+import multer from 'multer';
 
 const router = express.Router();
+const upload = multer();
 
 // Support Team Routes
 // GET /support/get_all_backlog_data?employee_id={employee_id} - Get all backlog data assigned to an employee
@@ -67,6 +69,9 @@ router.post('/createcasepaymentphases', SupportController.createCasePaymentPhase
 
 // GET /support/getuserdetails?email={email} - Get user details by email
 router.get('/getuserdetails', SupportController.getUserDetails);
+
+// POST /support/list-documents - List all documents for a case (multipart/form-data with case_id)
+router.post('/list-documents', upload.none(), SupportController.listDocuments);
 
 // GET /support/{uuid} - Support UUID routes (like n8n webhooks) - for backward compatibility
 // This allows routes like /support/2d7eb946-588f-436d-8ebe-ccb118babf12 to work

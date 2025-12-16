@@ -2945,6 +2945,67 @@ class SupportController {
       }]);
     }
   }
+
+  // POST /support/list-documents
+  // List all documents for a case
+  static async listDocuments(req, res) {
+    try {
+      const { case_id } = req.body;
+      const jwtToken = req.headers['jwt_token'];
+      const sessionId = req.headers['session_id'];
+
+      // Validate case_id
+      if (!case_id || case_id === 'NaN') {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid case_id'
+        });
+      }
+
+      console.log(`[List Documents] Fetching documents for case_id: ${case_id}`);
+
+      // Query database for documents
+      const { data: documents, error: docError } = await supabase
+        .from('case_documents')
+        .select(`
+          document_id,
+          file_path
+        `)
+        .eq('case_id', case_id)
+        .eq('deleted_flag', false)
+        .order('upload_time', { ascending: false });
+
+      if (docError) {
+        console.error('[List Documents] Error fetching documents:', docError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to fetch documents',
+          documents: []
+        });
+      }
+
+      // Transform documents to match response format (only document_id and file_path)
+      const formattedDocuments = (documents || []).map(doc => ({
+        document_id: doc.document_id,
+        file_path: doc.file_path
+      }));
+
+      // Return response
+      return res.status(200).json({
+        success: true,
+        case_id: case_id,
+        documents: formattedDocuments
+      });
+
+    } catch (error) {
+      console.error('[List Documents] Error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch documents',
+        documents: []
+      });
+    }
+  }
 }
 
 export default SupportController;

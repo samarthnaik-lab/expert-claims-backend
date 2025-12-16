@@ -485,7 +485,11 @@ class CustomerController {
         .from('cases')
         .select(`
           *,
-          case_types(*)
+          case_types(*),
+          employees!cases_assigned_to_fkey(
+            first_name,
+            last_name
+          )
         `, { count: 'exact' })
         .eq('customer_id', customerId)
         .eq('deleted_flag', false)
@@ -502,70 +506,40 @@ class CustomerController {
         });
       }
 
-      // Status mapping (ticket_stage → status)
-      const statusMap = {
-        "Under Evaluation": "Under Review",
-        "Evaluation under review": "Under Review",
-        "Evaluated": "Under Review",
-        "Agreement pending": "Under Review",
-        "1st Instalment Pending": "Under Review",
-        "Under process": "Under Review",
-        "Pending with grievance cell of insurance company": "Under Review",
-        "Pending with Ombudsman": "Under Review",
-        "Under Litigation/Consumer Forum": "Under Review",
-        "Under Arbitration": "Under Review",
-        "on hold": "Under Review",
-        "Completed": "Approved",
-        "Partner Payment Pending": "Approved",
-        "Partner Payment Done": "Approved",
-        "Cancelled": "Rejected"
-      };
-
-      // Transform cases data
+      // Transform cases data to match desired format
       const cases = (rawCases || []).map(c => {
-        const copy = { ...c };
-        
-        // Map ticket_stage to status
-        copy.status = statusMap[copy.ticket_stage] || "Under Review";
-
-        // Flatten case_types if present
-        if (copy.case_types && typeof copy.case_types === "object") {
-          copy.case_type_name = copy.case_types.case_type_name || null;
-          delete copy.case_types;
+        // Build assigned_agent name from employee data
+        let assignedAgent = null;
+        if (c.employees && c.employees.first_name) {
+          const firstName = c.employees.first_name || '';
+          const lastName = c.employees.last_name || '';
+          assignedAgent = `${firstName} ${lastName}`.trim() || null;
         }
 
-        // Format amount_display
-        if (copy.case_value != null && copy.value_currency) {
-          const numeric = Number(copy.case_value);
-          copy.amount_display = `${copy.value_currency} ${Number.isNaN(numeric) ? copy.case_value : numeric.toLocaleString()}`;
-        }
+        // Build case_types object
+        const caseTypesObj = c.case_types ? {
+          case_type_name: c.case_types.case_type_name || null
+        } : null;
 
-        // Format last_update from updated_time
-        if (copy.updated_time) {
-          copy.last_update = copy.updated_time.split("T")[0];
-        }
-
-        return copy;
+        // Return only the fields needed in the exact format
+        return {
+          case_id: c.case_id,
+          case_summary: c.case_summary,
+          case_description: c.case_description,
+          ticket_stage: c.ticket_stage,
+          case_types: caseTypesObj,
+          assigned_agent: assignedAgent,
+          created_time: c.created_time,
+          priority: c.priority,
+          case_value: c.case_value,
+          value_currency: c.value_currency,
+          customer_id: c.customer_id,
+          assigned_to: c.assigned_to
+        };
       });
 
-      // Build paginated response
-      const totalPages = Math.ceil((count || 0) / sizeNum);
-      
-      const response = {
-        status: 'success',
-        message: 'Customer cases fetched successfully',
-        data: cases,
-        pagination: {
-          page: pageNum,
-          size: sizeNum,
-          total: count || 0,
-          totalPages: totalPages,
-          hasNext: pageNum < totalPages,
-          hasPrev: pageNum > 1
-        }
-      };
-
-      return res.status(200).json(response);
+      // Return as array directly
+      return res.status(200).json(cases);
 
     } catch (error) {
       console.error('[Customer] Get customer cases error:', error);
@@ -573,6 +547,116 @@ class CustomerController {
         status: 'error',
         message: 'Internal server error: ' + error.message,
         statusCode: 500
+      });
+    }
+  }
+
+  // GET /customer/getdocumentcatagories
+  // Get all document categories with nested case_types information
+  static async getDocumentCategoriesWebhook(req, res) {
+    try {
+      const jwtToken = req.headers['jwt_token'];
+      const sessionId = req.headers['session_id'];
+
+      console.log('[Customer] Fetching all document categories with case_types');
+
+      // Fetch all document categories with nested case_types
+      const { data: categories, error } = await supabase
+        .from('document_categories')
+        .select(`
+          category_id,
+          case_type_id,
+          document_name,
+          is_mandatory,
+          is_active,
+          created_time,
+          case_types!document_categories_case_type_id_fkey(*)
+        `)
+        .eq('is_active', true)
+        .order('category_id', { ascending: true });
+
+      if (error) {
+        console.error('[Customer] Error fetching document categories:', error);
+        return res.status(500).json([]);
+      }
+
+      // Transform data to match exact response format
+      const formattedCategories = (categories || []).map(cat => ({
+        category_id: cat.category_id,
+        case_type_id: cat.case_type_id,
+        document_name: cat.document_name,
+        is_mandatory: cat.is_mandatory,
+        is_active: cat.is_active,
+        created_time: cat.created_time,
+        case_types: cat.case_types || null
+      }));
+
+      // Return as array directly
+      return res.status(200).json(formattedCategories);
+
+    } catch (error) {
+      console.error('[Customer] Get document categories error:', error);
+      return res.status(500).json([]);
+    }
+  }
+
+  // POST /customer/list-documents
+  // List all documents for a case
+  static async listDocuments(req, res) {
+    try {
+      const { case_id } = req.body;
+      const jwtToken = req.headers['jwt_token'];
+      const sessionId = req.headers['session_id'];
+
+      // Validate case_id
+      if (!case_id || case_id === 'NaN') {
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid case_id'
+        });
+      }
+
+      console.log(`[Customer] Fetching documents for case_id: ${case_id}`);
+
+      // Query database for documents
+      const { data: documents, error: docError } = await supabase
+        .from('case_documents')
+        .select(`
+          document_id,
+          file_path
+        `)
+        .eq('case_id', case_id)
+        .eq('deleted_flag', false)
+        .order('upload_time', { ascending: false });
+
+      if (docError) {
+        console.error('[Customer] Error fetching documents:', docError);
+        return res.status(500).json({
+          success: false,
+          message: 'Failed to fetch documents',
+          documents: []
+        });
+      }
+
+      // Transform documents to match response format (only document_id and file_path)
+      const formattedDocuments = (documents || []).map(doc => ({
+        document_id: doc.document_id,
+        file_path: doc.file_path
+      }));
+
+      // Return response
+      return res.status(200).json({
+        success: true,
+        case_id: case_id,
+        documents: formattedDocuments
+      });
+
+    } catch (error) {
+      console.error('[Customer] List documents error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Failed to fetch documents',
+        documents: []
       });
     }
   }
