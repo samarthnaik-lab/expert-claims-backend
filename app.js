@@ -7,6 +7,7 @@ import publicRoutes from './routes/publicRoutes.js';
 import supportRoutes from './routes/supportRoutes.js';
 import customerRoutes from './routes/customerRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
+import logger from './utils/logger.js';
 
 dotenv.config();
 
@@ -34,9 +35,49 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging
+// Request logging middleware with response time tracking
 app.use((req, res, next) => {
-  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`);
+  const startTime = Date.now();
+  req.requestId = logger.generateRequestId();
+  
+  // Store response body for logging
+  const originalSend = res.send;
+  const originalJson = res.json;
+  let responseBody = null;
+  
+  // Override res.send to capture response body
+  res.send = function(body) {
+    responseBody = body;
+    return originalSend.call(this, body);
+  };
+  
+  res.json = function(body) {
+    responseBody = body;
+    return originalJson.call(this, body);
+  };
+  
+  // Override res.end to capture response time and log
+  const originalEnd = res.end;
+  res.end = function(chunk, encoding) {
+    const responseTime = Date.now() - startTime;
+    
+    // Parse response body if it's a buffer
+    let parsedBody = responseBody;
+    if (chunk && !responseBody) {
+      try {
+        parsedBody = JSON.parse(chunk.toString());
+      } catch (e) {
+        parsedBody = chunk.toString().substring(0, 500); // Limit size
+      }
+    }
+    
+    // Log the request with full details
+    logger.logRequest(req, res, responseTime, parsedBody);
+    
+    // Call original end method
+    originalEnd.call(this, chunk, encoding);
+  };
+  
   next();
 });
 
@@ -63,11 +104,16 @@ app.use('/admin', adminRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {
-  console.error('Error:', err);
+  logger.logError(err, req, {
+    errorType: 'UnhandledException',
+    route: req.path,
+    method: req.method
+  });
   res.status(err.status || 500).json({
     status: 'error',
     message: err.message || 'Internal server error',
-    statusCode: err.status || 500
+    statusCode: err.status || 500,
+    error_code: err.code || 'INTERNAL_SERVER_ERROR'
   });
 });
 
@@ -81,5 +127,6 @@ app.use((req, res) => {
 });
 
 app.listen(PORT, () => {
+  logger.logInfo(`Server started on port ${PORT}`, { port: PORT, environment: process.env.NODE_ENV || 'development' });
   console.log(`Server running on port ${PORT}`);
 });
