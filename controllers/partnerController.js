@@ -14,6 +14,16 @@ import Validators from '../utils/validators.js';
 import supabase from '../config/database.js';
 import path from 'path';
 import nodemailer from 'nodemailer';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+
+// AWS S3 Client
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION || 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
+});
 
 // Email configuration constants
 const FROM_EMAIL = process.env.FROM_EMAIL || "analytics@expertclaims.co.in";
@@ -683,21 +693,19 @@ class PartnerController {
   // POST /api/partnerbacklogentry
   static async createPartnerBacklogEntry(req, res) {
     try {
-      const userId = req.user?.user_id;
-      // Get partner_id from partners table by user_id
+      // Authentication is handled separately, so req.user may not be available
+      // Use created_by from request body instead
+      const userId = req.user?.user_id || null;
+      
+      // Get partner_id from partners table by user_id (if available)
+      // Otherwise, use backlog_referring_partner_id from request body
       let partnerId = null;
       if (userId) {
         const { data: partner } = await PartnerModel.findByUserId(userId);
         partnerId = partner?.partner_id || null;
       }
       
-      if (!partnerId) {
-        return res.status(400).json({
-          success: false,
-          message: 'Partner not found for this user',
-          statusCode: 400
-        });
-      }
+      // Note: partnerId can be null if no user authentication - will use backlog_referring_partner_id from body
 
       // Get form data - handle both JSON and form-data
       // Log for debugging
@@ -895,31 +903,9 @@ class PartnerController {
         }
       }
       
-      // Check if bucket exists, create if not
-      const { data: buckets, error: listBucketsError } = await supabase.storage.listBuckets();
-      let bucketExists = false;
-      if (!listBucketsError && buckets) {
-        bucketExists = buckets.some(bucket => bucket.name === bucketName);
-        console.log(`Bucket "${bucketName}" exists: ${bucketExists}`);
-      }
-      
-      // Create bucket if it doesn't exist
-      if (!bucketExists) {
-        console.log(`Bucket "${bucketName}" does not exist, attempting to create...`);
-        const { data: createBucketData, error: createBucketError } = await supabase.storage.createBucket(bucketName, {
-          public: true,
-          allowedMimeTypes: ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'image/jpeg', 'image/png', 'text/plain', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
-          fileSizeLimit: 10485760 // 10MB
-        });
-        
-        if (createBucketError) {
-          console.error('Error creating bucket:', createBucketError);
-          console.log(`Using fallback bucket: "backlog-documents"`);
-          bucketName = 'backlog-documents';
-        } else {
-          console.log(`✓ Successfully created bucket: "${bucketName}"`);
-        }
-      }
+      // Note: S3 buckets must be created manually in AWS Console
+      // Using bucket name: expc-{case_type_name}
+      console.log(`Using S3 bucket: "${bucketName}"`);
       
       console.log('=== DOCUMENT UPLOAD DEBUG ===');
       console.log('document_count:', document_count);
@@ -977,13 +963,11 @@ class PartnerController {
           
           console.log(`Storage path: ${storagePath}`);
           
-          // Upload file to Supabase Storage
-          // Note: You need to create a bucket named 'backlog-documents' in Supabase Storage
-          let publicUrl = storagePath; // Default to storage path
+          // Upload file to AWS S3
           let uploadSuccess = false;
           
           try {
-            console.log(`Attempting to upload file ${index} to Supabase Storage...`);
+            console.log(`Attempting to upload file ${index} to S3...`);
             console.log(`Bucket: ${bucketName}, Path: ${storagePath}, Size: ${file.buffer.length} bytes`);
             console.log(`File buffer type: ${typeof file.buffer}, is Buffer: ${Buffer.isBuffer(file.buffer)}`);
             
@@ -992,84 +976,25 @@ class PartnerController {
               throw new Error('File buffer is empty or invalid');
             }
             
-            const { data: uploadData, error: uploadError } = await supabase.storage
-              .from(bucketName)
-              .upload(storagePath, file.buffer, {
-                contentType: file.mimetype || 'application/octet-stream',
-                upsert: false,
-                cacheControl: '3600'
-              });
+            // Upload to S3
+            const command = new PutObjectCommand({
+              Bucket: bucketName,
+              Key: storagePath,
+              Body: file.buffer,
+              ContentType: file.mimetype || 'application/octet-stream'
+            });
             
-            if (uploadError) {
-              console.error(`=== ERROR uploading file ${index} to Supabase Storage ===`);
-              console.error('Error:', uploadError);
-              console.error('Error message:', uploadError.message);
-              console.error('Error statusCode:', uploadError.statusCode);
-              console.error('Error error:', uploadError.error);
-              console.error('Full error details:', JSON.stringify(uploadError, null, 2));
-              
-              // Try fallback bucket if main bucket fails
-              if (uploadError.message && (uploadError.message.includes('Bucket') || uploadError.message.includes('not found'))) {
-                const fallbackBucket = 'backlog-documents';
-                console.log(`[Partner] Retrying with fallback bucket: "${fallbackBucket}"`);
-                
-                const { data: retryUploadData, error: retryUploadError } = await supabase.storage
-                  .from(fallbackBucket)
-                  .upload(storagePath, file.buffer, {
-                    contentType: file.mimetype || 'application/octet-stream',
-                    upsert: false,
-                    cacheControl: '3600'
-                  });
-                
-                if (!retryUploadError && retryUploadData) {
-                  uploadSuccess = true;
-                  console.log(`✓ File ${index} uploaded successfully to fallback bucket: "${fallbackBucket}"`);
-                  const { data: urlData } = supabase.storage
-                    .from(fallbackBucket)
-                    .getPublicUrl(storagePath);
-                  if (urlData?.publicUrl) {
-                    publicUrl = urlData.publicUrl;
-                    console.log(`Public URL: ${urlData.publicUrl}`);
-                  } else {
-                    publicUrl = storagePath;
-                  }
-                } else {
-                  console.error(`[Partner] Fallback bucket also failed:`, retryUploadError);
-                  throw new Error(`File upload failed: ${retryUploadError?.message || 'Unknown error'}`);
-                }
-              } else {
-                // For other errors, throw to prevent saving invalid record
-                throw new Error(`File upload failed: ${uploadError.message || 'Unknown error'}`);
-              }
-            } else {
-              uploadSuccess = true;
-              console.log(`✓ File ${index} uploaded successfully to Storage`);
-              console.log('Upload data:', uploadData);
-              
-              // Get public URL for the uploaded file
-              const { data: urlData } = supabase.storage
-                .from(bucketName)
-                .getPublicUrl(storagePath);
-              
-              console.log('URL data:', urlData);
-              
-              if (urlData?.publicUrl) {
-                publicUrl = urlData.publicUrl;
-                console.log(`Public URL: ${publicUrl}`);
-              } else {
-                // If no public URL, construct it manually
-                const projectUrl = process.env.SUPABASE_URL?.replace('/rest/v1', '') || '';
-                publicUrl = `${projectUrl}/storage/v1/object/public/${bucketName}/${storagePath}`;
-                console.log(`Constructed public URL: ${publicUrl}`);
-              }
-            }
-          } catch (storageError) {
-            console.error(`=== EXCEPTION uploading file ${index} to Supabase Storage ===`);
-            console.error('Exception:', storageError);
-            console.error('Exception message:', storageError.message);
-            console.error('Exception stack:', storageError.stack);
+            await s3Client.send(command);
+            uploadSuccess = true;
+            console.log(`✓ File ${index} uploaded successfully to S3`);
+            
+          } catch (s3Error) {
+            console.error(`=== ERROR uploading file ${index} to S3 ===`);
+            console.error('Error:', s3Error);
+            console.error('Error message:', s3Error.message);
+            console.error('Full error details:', JSON.stringify(s3Error, null, 2));
             // Don't continue - throw error to prevent saving invalid record
-            throw new Error(`File upload failed: ${storageError.message || 'Unknown error'}`);
+            throw new Error(`S3 upload failed: ${s3Error.message || 'Unknown error'}`);
           }
           
           // Build file path for response: bk-{backlog_id}/{document_type_name}_{original_filename}_{timestamp}.{ext}
@@ -1346,7 +1271,7 @@ class PartnerController {
             category_id: categoryId, // GUARANTEED NOT NULL
             original_filename: fileName || null,
             stored_filename: `${fileTypeName}_${baseFileName}_${timestamp}${fileExt}`,
-            file_path: publicUrl || null, // Store Supabase Storage URL
+            file_path: storagePath, // Store S3 path (e.g., "bk-{backlog_id}/{filename}")
             file_size: file.size ? file.size.toString() : null,
             file_type: fileTypeName || fileType || null,
             mime_type: file.mimetype || null,
@@ -1368,7 +1293,6 @@ class PartnerController {
             uploaded_by: documentData.uploaded_by,
             storagePath,
             uploadSuccess,
-            publicUrl,
             fileName
           });
           documents.push(documentData);

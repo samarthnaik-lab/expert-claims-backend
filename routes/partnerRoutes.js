@@ -5,7 +5,11 @@ import { uploadMultipleFiles } from '../middleware/uploadMiddleware.js';
 
 const router = express.Router();
 
-// Apply authentication middleware to all routes
+// POST /api/partnerbacklogentry (with file upload support) - NO AUTH REQUIRED
+// This route is placed before auth middleware to bypass authentication
+router.post('/partnerbacklogentry', uploadMultipleFiles, PartnerController.createPartnerBacklogEntry);
+
+// Apply authentication middleware to all routes below
 router.use(AuthMiddleware.authenticate);
 router.use(AuthMiddleware.extractProfileHeaders);
 
@@ -26,9 +30,6 @@ router.get('/referal_partner_id_data', PartnerController.getBacklogData);
 
 // GET /api/backlog_id?backlog_id=ECSI-GA-25-029 - Get backlog data by ID
 router.get('/backlog_id', PartnerController.getBacklogById);
-
-// POST /api/partnerbacklogentry (with file upload support) - must come before UUID route
-router.post('/partnerbacklogentry', uploadMultipleFiles, PartnerController.createPartnerBacklogEntry);
 
 // POST /api/createTask
 router.post('/createTask', PartnerController.createTask);
