@@ -13,6 +13,29 @@ import IdGenerator from '../utils/idGenerator.js';
 import Validators from '../utils/validators.js';
 import supabase from '../config/database.js';
 import path from 'path';
+import nodemailer from 'nodemailer';
+
+// Email configuration constants
+const FROM_EMAIL = process.env.FROM_EMAIL || "analytics@expertclaims.co.in";
+const LOGIN_URL = process.env.LOGIN_URL || "https://expert-claims-g8p9.vercel.app/login";
+
+// SMTP transporter helper function
+function getMailer() {
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST || "smtp.expertclaims.co.in",
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: false, // true for 465, false for other ports
+    auth: {
+      user: process.env.SMTP_USER || "analytics@expertclaims.co.in",
+      pass: process.env.SMTP_PASS || "ExpertAnalysis@2025",
+    },
+    tls: {
+      // Disable certificate hostname validation to handle certificate mismatch
+      rejectUnauthorized: false
+    },
+    requireTLS: true,
+  });
+}
 
 class PartnerController {
   // GET /api/getpartnerdetails?email={email}
@@ -2283,6 +2306,85 @@ class PartnerController {
           message: `Backlog with ID ${backlog_id} not found`,
           statusCode: 404
         });
+      }
+
+      // Email notification logic
+      try {
+        // Fetch backlog details to get assigned_to information
+        const { data: backlogDetails, error: backlogFetchError } = await supabase
+          .from('backlog')
+          .select('backlog_id, assigned_to, assigned_consultant_name, backlog_referring_partner_id')
+          .eq('backlog_id', backlog_id)
+          .single();
+
+        if (!backlogFetchError && backlogDetails) {
+          // Check if assigned_to exists
+          if (!backlogDetails.assigned_to) {
+            console.warn(`[Partner] assigned_to missing for backlog: ${backlog_id}`);
+          } else {
+            // Get employee's user_id
+            const { data: employeeData, error: employeeError } = await supabase
+              .from('employees')
+              .select('user_id')
+              .eq('employee_id', backlogDetails.assigned_to)
+              .single();
+
+            if (!employeeError && employeeData?.user_id) {
+              // Get user's email
+              const { data: userData, error: userError } = await supabase
+                .from('users')
+                .select('email')
+                .eq('user_id', employeeData.user_id)
+                .single();
+
+              if (!userError && userData?.email) {
+                const transporter = getMailer();
+
+                const mailText =
+                  `Dear Sir/Madam,\n\n` +
+                  `Assignment ${backlog_id} has been updated for Gap Analysis.\n` +
+                  `Please review the feedback below:\n\n` +
+                  `Feedback: ${feedback || ""}\n` +
+                  `Click here to visit ${LOGIN_URL}\n\n` +
+                  `Best Regards,\nExpert Claim Solutions Team`;
+
+                await transporter.sendMail({
+                  from: FROM_EMAIL,
+                  to: userData.email,
+                  subject: "Expert Claims Policy Assigned",
+                  text: mailText,
+                });
+
+                console.log(`[Partner] Email sent to consultant for feedback update`, {
+                  backlog_id: backlog_id,
+                  email: userData.email,
+                  employee_id: backlogDetails.assigned_to
+                });
+              } else {
+                console.warn(`[Partner] Could not find consultant email`, {
+                  backlog_id: backlog_id,
+                  employee_id: backlogDetails.assigned_to,
+                  user_id: employeeData.user_id,
+                  error: userError?.message
+                });
+              }
+            } else {
+              console.warn(`[Partner] Could not find employee user_id`, {
+                backlog_id: backlog_id,
+                employee_id: backlogDetails.assigned_to,
+                error: employeeError?.message
+              });
+            }
+          }
+        } else {
+          console.warn(`[Partner] Could not fetch backlog details for email notification`, {
+            backlog_id: backlog_id,
+            error: backlogFetchError?.message
+          });
+        }
+      } catch (emailError) {
+        // Log email error but don't fail the request
+        console.error('[Partner] Error sending email notification:', emailError);
       }
 
       // Return updated backlog data

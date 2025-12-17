@@ -4,6 +4,35 @@ import logger from '../utils/logger.js';
 import BacklogModel from '../models/BacklogModel.js';
 import BacklogCommentModel from '../models/BacklogCommentModel.js';
 import path from 'path';
+import nodemailer from 'nodemailer';
+
+// Email configuration constants
+const DEFAULT_EMPLOYEE_ID = 61;
+const FALLBACK_USER_ID = 3; // Fallback user_id for partner lookup
+const FALLBACK_EMAIL = process.env.FALLBACK_EMAIL || "analytics@expertclaims.co.in";
+const FROM_EMAIL = process.env.FROM_EMAIL || "analytics@expertclaims.co.in";
+const LOGIN_URL = process.env.LOGIN_URL || "https://expert-claims-g8p9.vercel.app/login";
+
+// SMTP transporter helper function
+function getMailer() {
+  return nodemailer.createTransport({
+    host: process.env.SMTP_HOST || "smtp.expertclaims.co.in",
+    port: Number(process.env.SMTP_PORT || 587),
+    secure: false, // true for 465, false for other ports
+    auth: {
+      user: process.env.SMTP_USER || "analytics@expertclaims.co.in",
+      pass: process.env.SMTP_PASS || "ExpertAnalysis@2025", // Should be set via environment variable for security
+    },
+    tls: {
+      // Disable certificate hostname validation to handle certificate mismatch
+      // The certificate is for us2.smtp.mailhostbox.com but we connect to smtp.expertclaims.co.in
+      // This is safe when you trust the SMTP server
+      rejectUnauthorized: false
+    },
+    // Require TLS encryption
+    requireTLS: true,
+  });
+}
 
 class AdminController {
   // GET /admin/admindashboard
@@ -85,11 +114,11 @@ class AdminController {
         // Count pending approvals - backlog items without status or with pending status
         pendingApprovals = (backlogItems || []).filter(item => {
           const status = item.status?.toLowerCase() || '';
-          return !status || 
-                 status.includes('pending') || 
-                 status.includes('approval') ||
-                 status === 'new' ||
-                 status === '';
+          return !status ||
+            status.includes('pending') ||
+            status.includes('approval') ||
+            status === 'new' ||
+            status === '';
         }).length;
       }
 
@@ -674,18 +703,18 @@ class AdminController {
         const fieldErrors = {};
         const emailExists = existingUsers.some(u => u.email === email_address);
         const usernameExists = existingUsers.some(u => u.username === username);
-        
+
         if (emailExists) {
           fieldErrors.email = 'Email address is already registered';
         }
         if (usernameExists) {
           fieldErrors.username = 'Username is already taken';
         }
-        logger.logFailedOperation(req, 409, 'USER_001', 
-          emailExists && usernameExists 
-            ? 'Email and username already exist' 
-            : emailExists 
-              ? 'Email already exists' 
+        logger.logFailedOperation(req, 409, 'USER_001',
+          emailExists && usernameExists
+            ? 'Email and username already exist'
+            : emailExists
+              ? 'Email already exists'
               : 'Username already exists', {
           operation: 'createUser',
           email: email_address,
@@ -694,10 +723,10 @@ class AdminController {
         });
         return res.status(409).json([{
           status: 'error',
-          message: emailExists && usernameExists 
-            ? 'Email and username already exist' 
-            : emailExists 
-              ? 'Email already exists' 
+          message: emailExists && usernameExists
+            ? 'Email and username already exist'
+            : emailExists
+              ? 'Email already exists'
               : 'Username already exists',
           error_code: 'USER_001',
           field_errors: fieldErrors
@@ -1387,7 +1416,7 @@ class AdminController {
 
       // Also soft delete role-specific records if they exist
       const role = existingUser.role?.toLowerCase();
-      
+
       if (role === 'employee') {
         await supabase
           .from('employees')
@@ -1510,36 +1539,36 @@ class AdminController {
             // 1. Get case_types by case_type_id
             backlog.case_type_id
               ? supabase
-                  .from('case_types')
-                  .select('*')
-                  .eq('case_type_id', backlog.case_type_id)
-                  .single()
-                  .then(({ data, error }) => ({ data, error }))
-                  .catch(() => ({ data: null, error: null }))
+                .from('case_types')
+                .select('*')
+                .eq('case_type_id', backlog.case_type_id)
+                .single()
+                .then(({ data, error }) => ({ data, error }))
+                .catch(() => ({ data: null, error: null }))
               : Promise.resolve({ data: null, error: null }),
 
             // 2. Get partners by backlog_referring_partner_id
             backlog.backlog_referring_partner_id
               ? supabase
-                  .from('partners')
-                  .select('*')
-                  .eq('partner_id', backlog.backlog_referring_partner_id)
-                  .eq('deleted_flag', false)
-                  .single()
-                  .then(({ data, error }) => ({ data, error }))
-                  .catch(() => ({ data: null, error: null }))
+                .from('partners')
+                .select('*')
+                .eq('partner_id', backlog.backlog_referring_partner_id)
+                .eq('deleted_flag', false)
+                .single()
+                .then(({ data, error }) => ({ data, error }))
+                .catch(() => ({ data: null, error: null }))
               : Promise.resolve({ data: null, error: null }),
 
             // 3. Get employees by assigned_to
             backlog.assigned_to
               ? supabase
-                  .from('employees')
-                  .select('*')
-                  .eq('employee_id', backlog.assigned_to)
-                  .eq('deleted_flag', false)
-                  .single()
-                  .then(({ data, error }) => ({ data, error }))
-                  .catch(() => ({ data: null, error: null }))
+                .from('employees')
+                .select('*')
+                .eq('employee_id', backlog.assigned_to)
+                .eq('deleted_flag', false)
+                .single()
+                .then(({ data, error }) => ({ data, error }))
+                .catch(() => ({ data: null, error: null }))
               : Promise.resolve({ data: null, error: null }),
 
             // 4. Get backlog_comments
@@ -1559,12 +1588,12 @@ class AdminController {
               .order('upload_time', { ascending: false })
               .then(({ data, error }) => {
                 const activeDocs = (data || []).filter(doc => doc.deleted_flag !== true);
-                return { 
+                return {
                   data: activeDocs.map(doc => ({
                     ...doc,
                     access_count: doc.access_count ? (isNaN(parseInt(doc.access_count)) ? doc.access_count : parseInt(doc.access_count)) : 0
                   })),
-                  error 
+                  error
                 };
               })
               .catch(() => ({ data: [], error: null }))
@@ -1595,9 +1624,9 @@ class AdminController {
           // Get entity name from multiple sources
           let entityName = null;
           if (backlog.partners) {
-            entityName = backlog.partners.entity_name || 
-                        backlog.partners['name of entity'] || 
-                        null;
+            entityName = backlog.partners.entity_name ||
+              backlog.partners['name of entity'] ||
+              null;
           }
           if (!entityName && backlog.employees) {
             entityName = backlog.employees.entity_name || null;
@@ -1609,11 +1638,11 @@ class AdminController {
           // Get partner name
           let partnerName = null;
           if (backlog.partners) {
-            partnerName = backlog.partners.partner_name || 
-                         (backlog.partners.first_name && backlog.partners.last_name 
-                           ? `${backlog.partners.first_name} ${backlog.partners.last_name}`.trim()
-                           : null) ||
-                         null;
+            partnerName = backlog.partners.partner_name ||
+              (backlog.partners.first_name && backlog.partners.last_name
+                ? `${backlog.partners.first_name} ${backlog.partners.last_name}`.trim()
+                : null) ||
+              null;
           }
 
           // Fetch customer data if customer_id exists in backlog
@@ -1867,11 +1896,11 @@ class AdminController {
       // Get partner name
       let partnerName = null;
       if (backlogData.partners) {
-        partnerName = backlogData.partners.partner_name || 
-                     (backlogData.partners.first_name && backlogData.partners.last_name 
-                       ? `${backlogData.partners.first_name} ${backlogData.partners.last_name}`.trim()
-                       : null) ||
-                     null;
+        partnerName = backlogData.partners.partner_name ||
+          (backlogData.partners.first_name && backlogData.partners.last_name
+            ? `${backlogData.partners.first_name} ${backlogData.partners.last_name}`.trim()
+            : null) ||
+          null;
       }
 
       // Format case_types
@@ -2080,7 +2109,7 @@ class AdminController {
           errorCode: error.code
         });
         console.error('[Admin] Error fetching technical consultants:', error);
-        
+
         // Fallback: try fetching all active employees
         const { data: allEmployees, error: allError } = await supabase
           .from('employees')
@@ -2406,6 +2435,76 @@ class AdminController {
         });
       }
 
+      // Email notification logic
+      try {
+        // Only send email if assigned_to was set
+        if (updatedBacklog.assigned_to) {
+          const assignedTo = updatedBacklog.assigned_to;
+
+          // Get employee's user_id
+          const { data: employeeData, error: employeeError } = await supabase
+            .from('employees')
+            .select('user_id')
+            .eq('employee_id', assignedTo)
+            .single();
+
+          if (!employeeError && employeeData?.user_id) {
+            // Get user's email
+            const { data: userData, error: userError } = await supabase
+              .from('users')
+              .select('email')
+              .eq('user_id', employeeData.user_id)
+              .single();
+
+            if (!userError && userData?.email) {
+              const transporter = getMailer();
+
+              const mailText =
+                `Dear Sir/Madam,\n\n` +
+                `We have referred/updated assignment No:${backlog_id} for Gap Analysis. Kindly do the needful.\n` +
+                `Click here to visit ${LOGIN_URL}\n\n` +
+                `Best Regards,\nExpert Claim Solutions Team`;
+
+              await transporter.sendMail({
+                from: FROM_EMAIL,
+                to: userData.email,
+                subject: "Expert Claims Policy Assigned",
+                text: mailText,
+              });
+
+              logger.logInfo('[Admin] Email sent to consultant', {
+                backlog_id: backlog_id,
+                email: userData.email,
+                employee_id: assignedTo,
+                reason: 'consultant_assigned'
+              });
+            } else {
+              logger.logWarning('[Admin] Could not find consultant email', {
+                backlog_id: backlog_id,
+                employee_id: assignedTo,
+                user_id: employeeData.user_id,
+                error: userError?.message
+              });
+            }
+          } else {
+            logger.logWarning('[Admin] Could not find employee user_id', {
+              backlog_id: backlog_id,
+              employee_id: assignedTo,
+              error: employeeError?.message
+            });
+          }
+        }
+      } catch (emailError) {
+        // Log email error but don't fail the request
+        logger.logError(emailError, req, {
+          operation: 'updateConsultantPolicy',
+          context: 'Email Notification',
+          errorType: 'EmailError',
+          backlog_id: backlog_id
+        });
+        console.error('[Admin] Error sending email notification:', emailError);
+      }
+
       return res.status(200).json({
         success: true,
         message: 'Consultant assigned successfully',
@@ -2522,8 +2621,85 @@ class AdminController {
         });
       }
 
-      const responseMessage = expert_description 
-        ? 'Expert summary added successfully' 
+      // Email notification logic
+      try {
+        // Fetch backlog details to get partner information
+        const { data: backlogDetails, error: backlogFetchError } = await supabase
+          .from('backlog')
+          .select('backlog_id, backlog_referring_partner_id')
+          .eq('backlog_id', backlog_id)
+          .single();
+
+        if (!backlogFetchError && backlogDetails) {
+          // Get partner_id (with fallback to FALLBACK_USER_ID)
+          const partnerId = backlogDetails.backlog_referring_partner_id || FALLBACK_USER_ID;
+
+          // Get partner's user_id
+          const { data: partnerData, error: partnerError } = await supabase
+            .from('partners')
+            .select('partner_id, user_id')
+            .eq('partner_id', partnerId)
+            .single();
+
+          const userId = partnerData?.user_id || FALLBACK_USER_ID;
+
+          // Get user's email
+          const { data: userData, error: userError } = await supabase
+            .from('users')
+            .select('user_id, email')
+            .eq('user_id', userId)
+            .single();
+
+          if (!userError && userData?.email) {
+            const transporter = getMailer();
+
+            const mailText =
+              `Dear Sir/Madam,\n\n` +
+              `You have an update from Expert Claim Solutions Team on the Gap Analysis Case referred by you.\n` +
+              `Please login to ${LOGIN_URL}.\n\n` +
+              `Best Regards,\nExpert Claim Solutions`;
+
+            await transporter.sendMail({
+              from: FROM_EMAIL,
+              to: userData.email,
+              subject: "Expert Claims Policy Status Changed",
+              text: mailText,
+            });
+
+            logger.logInfo('[Admin] Email sent to partner', {
+              backlog_id: backlog_id,
+              email: userData.email,
+              partner_id: partnerId,
+              user_id: userId,
+              reason: 'status_updated'
+            });
+          } else {
+            logger.logWarning('[Admin] Could not find partner email', {
+              backlog_id: backlog_id,
+              partner_id: partnerId,
+              user_id: userId,
+              error: userError?.message
+            });
+          }
+        } else {
+          logger.logWarning('[Admin] Could not fetch backlog details for email notification', {
+            backlog_id: backlog_id,
+            error: backlogFetchError?.message
+          });
+        }
+      } catch (emailError) {
+        // Log email error but don't fail the request
+        logger.logError(emailError, req, {
+          operation: 'updateStatusTechnicalConsultant',
+          context: 'Email Notification',
+          errorType: 'EmailError',
+          backlog_id: backlog_id
+        });
+        console.error('[Admin] Error sending email notification:', emailError);
+      }
+
+      const responseMessage = expert_description
+        ? 'Expert summary added successfully'
         : 'Status updated successfully';
 
       return res.status(200).json({
@@ -2674,6 +2850,132 @@ class AdminController {
         });
       }
 
+      // Email notification logic
+      try {
+        // Fetch backlog details for email notification
+        const { data: backlogDetails, error: backlogFetchError } = await supabase
+          .from('backlog')
+          .select('backlog_id, assigned_to, assigned_consultant_name, backlog_referring_partner_id')
+          .eq('backlog_id', backlog_id)
+          .single();
+
+        if (!backlogFetchError && backlogDetails) {
+          const transporter = getMailer();
+          const isConsultantEmpty =
+            backlogDetails.assigned_consultant_name === null ||
+            backlogDetails.assigned_consultant_name === undefined ||
+            String(backlogDetails.assigned_consultant_name).trim() === "";
+
+          if (isConsultantEmpty) {
+            // Notify partner user if consultant is not assigned
+            const partnerId = backlogDetails.backlog_referring_partner_id;
+            let emailToSend = FALLBACK_EMAIL;
+
+            if (partnerId) {
+              // Get partner's user_id
+              const { data: partnerData, error: partnerError } = await supabase
+                .from('partners')
+                .select('user_id')
+                .eq('partner_id', partnerId)
+                .single();
+
+              if (!partnerError && partnerData?.user_id) {
+                // Get user's email
+                const { data: userData, error: userError } = await supabase
+                  .from('users')
+                  .select('email')
+                  .eq('user_id', partnerData.user_id)
+                  .single();
+
+                if (!userError && userData?.email) {
+                  emailToSend = userData.email;
+                }
+              }
+            }
+
+            // Send email to partner
+            await transporter.sendMail({
+              from: FROM_EMAIL,
+              to: emailToSend,
+              subject: "Expert Claims Policy Commented",
+              text:
+                `Alert!!!!\n\n` +
+                `Hey there,\n\n` +
+                `Someone has Commented on the Policy: ${backlog_id}.\n` +
+                `Please Check And Verify it.\n` +
+                `Click here to visit the ExpertClaims site : ${LOGIN_URL}\n\n` +
+                `Best Regards,\nExpert Claims Solutions`,
+            });
+
+            logger.logInfo('[Admin] Email sent to partner', {
+              backlog_id: backlog_id,
+              email: emailToSend,
+              reason: 'consultant_not_assigned'
+            });
+          } else {
+            // Notify assigned employee user
+            const assignedTo = backlogDetails.assigned_to || DEFAULT_EMPLOYEE_ID;
+
+            // Get employee's user_id
+            const { data: employeeData, error: employeeError } = await supabase
+              .from('employees')
+              .select('user_id')
+              .eq('employee_id', assignedTo)
+              .single();
+
+            let consultantEmail = FALLBACK_EMAIL;
+
+            if (!employeeError && employeeData?.user_id) {
+              // Query users table to get email
+              const { data: userData, error: userError } = await supabase
+                .from('users')
+                .select('email')
+                .eq('user_id', employeeData.user_id)
+                .single();
+
+              if (!userError && userData?.email) {
+                consultantEmail = userData.email;
+              }
+            }
+
+            // Send email to consultant
+            await transporter.sendMail({
+              from: FROM_EMAIL,
+              to: consultantEmail,
+              subject: "Expert Claims Policy Commented",
+              text:
+                `Alert!!!!\n\n` +
+                `Hey there,\n\n` +
+                `"Someone" has added a new comment for the Policy: ${backlog_id}.\n` +
+                `Please Check And Verify it.\n` +
+                `Click here to visit the ExpertClaims site : ${LOGIN_URL}\n\n` +
+                `Regards,\nExpert Claims Solutions\n`,
+            });
+
+            logger.logInfo('[Admin] Email sent to consultant', {
+              backlog_id: backlog_id,
+              email: consultantEmail,
+              employee_id: assignedTo,
+              reason: 'consultant_assigned'
+            });
+          }
+        } else {
+          logger.logWarning('[Admin] Could not fetch backlog details for email notification', {
+            backlog_id: backlog_id,
+            error: backlogFetchError?.message
+          });
+        }
+      } catch (emailError) {
+        // Log email error but don't fail the request
+        logger.logError(emailError, req, {
+          operation: 'insertComment',
+          context: 'Email Notification',
+          errorType: 'EmailError',
+          backlog_id: backlog_id
+        });
+        console.error('[Admin] Error sending email notification:', emailError);
+      }
+
       return res.status(200).json({
         success: true,
         message: 'Comment added successfully',
@@ -2793,7 +3095,7 @@ class AdminController {
 
       // Get file path from document
       const filePath = document.file_path || document.stored_filename;
-      
+
       if (!filePath) {
         logger.logFailedOperation(req, 404, 'FILE_PATH_NOT_FOUND', 'Document file path not found', {
           operation: 'viewDocument',
@@ -2844,7 +3146,7 @@ class AdminController {
       // Construct Supabase storage URL
       // Try to extract bucket name from path or use default
       let bucketName = 'backlog-documents'; // Default bucket
-      
+
       // Check if path contains bucket name pattern (e.g., "bk-{backlog_id}/...")
       if (filePath.includes('bk-')) {
         bucketName = 'backlog-documents';
@@ -2852,11 +3154,11 @@ class AdminController {
 
       // Get Supabase URL from environment or config
       const supabaseUrl = process.env.SUPABASE_URL || '';
-      
+
       if (supabaseUrl) {
         // Construct public URL
         const publicUrl = `${supabaseUrl}/storage/v1/object/public/${bucketName}/${filePath}`;
-        
+
         return res.status(200).json({
           success: true,
           url: publicUrl,
@@ -3018,7 +3320,7 @@ class AdminController {
       // Optionally soft delete related records (comments and documents)
       // Note: backlog_comments table doesn't have deleted_flag column
       // So we skip soft deleting comments (they remain for audit trail)
-      
+
       // Soft delete documents (backlog_documents has deleted_flag column)
       try {
         const { error: docDeleteError } = await supabase
@@ -3067,7 +3369,447 @@ class AdminController {
       });
     }
   }
-}
 
+  // GET /admin/gettasks
+  // Get tasks (cases) with pagination for admin dashboard
+  static async getTasks(req, res) {
+    try {
+      const { page, size } = req.query;
+      const sessionId = req.headers['session_id'] || req.headers['session-id'];
+      const jwtToken = req.headers['jwt_token'] || req.headers['jwt-token'];
+
+      // Default pagination values if not provided
+      const pageNum = page ? parseInt(page) : 1;
+      const sizeNum = size ? parseInt(size) : 10000; // Default to large number to get all tasks
+
+      // Validate pagination parameters if provided
+      if (page && (isNaN(pageNum) || pageNum < 1)) {
+        logger.logFailedOperation(req, 400, 'INVALID_PARAMETERS', 'page must be a valid positive number', {
+          operation: 'getTasks',
+          providedPage: page,
+          pageNum: pageNum
+        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'page must be a valid positive number',
+          error_code: 'INVALID_PARAMETERS'
+        }]);
+      }
+
+      if (size && (isNaN(sizeNum) || sizeNum < 1)) {
+        logger.logFailedOperation(req, 400, 'INVALID_PARAMETERS', 'size must be a valid positive number', {
+          operation: 'getTasks',
+          providedSize: size,
+          sizeNum: sizeNum
+        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'size must be a valid positive number',
+          error_code: 'INVALID_PARAMETERS'
+        }]);
+      }
+
+      console.log(`[Admin] Fetching tasks - page: ${pageNum}, size: ${sizeNum}`);
+
+      // Calculate pagination
+      const offset = (pageNum - 1) * sizeNum;
+
+      // Fetch cases (tasks) with pagination and all relationships
+      const { data: casesList, error: casesError, count } = await supabase
+        .from('cases')
+        .select(`
+          *,
+          case_types(*),
+          customers(*),
+          partners!cases_referring_partner_id_fkey(*),
+          employees!cases_assigned_to_fkey(
+            employee_id,
+            first_name,
+            last_name,
+            department,
+            designation
+          )
+        `, { count: 'exact' })
+        .eq('deleted_flag', false)
+        .order('created_time', { ascending: false })
+        .range(offset, offset + sizeNum - 1);
+
+      if (casesError) {
+        logger.logDatabaseError(casesError, 'SELECT', 'cases', {
+          query: 'Fetching tasks with pagination',
+          page: pageNum,
+          size: sizeNum,
+          offset: offset
+        });
+        logger.logFailedOperation(req, 500, 'TASKS_FETCH_ERROR', 'Failed to fetch tasks', {
+          operation: 'getTasks',
+          error: casesError.message
+        });
+        console.error('[Admin] Error fetching tasks:', casesError);
+        return res.status(500).json([{
+          status: 'error',
+          message: 'Failed to fetch tasks',
+          error_code: 'TASKS_FETCH_ERROR',
+          error: casesError.message || 'Unknown error'
+        }]);
+      }
+
+      // Transform and flatten cases data to match frontend requirements
+      const flattenedTasks = (casesList || []).map(caseItem => {
+        const caseData = { ...caseItem };
+        const customer = caseItem.customers || {};
+        const employee = caseItem.employees || {};
+
+        // Remove nested objects (they will be flattened)
+        delete caseData.case_types;
+        delete caseData.customers;
+        delete caseData.partners;
+        delete caseData.employees;
+
+        // Required fields as per frontend requirements
+        // Basic case fields (already in caseData)
+        const task = {
+          case_id: caseData.case_id || null,
+          case_summary: caseData.case_summary || null,
+          ticket_stage: caseData.ticket_stage || null,
+          case_description: caseData.case_description || null,
+          priority: caseData.priority || null,
+          case_value: caseData.case_value || null,
+          value_currency: caseData.value_currency || null,
+          created_time: caseData.created_time || null,
+          due_date: caseData.due_date || null,
+          customer_id: caseData.customer_id || customer.customer_id || null,
+
+          // Assigned employee fields (flattened)
+          assigned_employee_name: employee && employee.first_name
+            ? `${employee.first_name || ''} ${employee.last_name || ''}`.trim() || null
+            : null,
+
+          // Customer fields (flattened) - required by frontend
+          customer_name: customer && customer.first_name
+            ? `${customer.first_name || ''} ${customer.last_name || ''}`.trim() || null
+            : null,
+          email_address: customer.email_address || null,
+          mobile_number: customer.mobile_number || null,
+          address: customer.address || null
+        };
+
+        return task;
+      });
+
+      // Build response in array format (frontend expects array with single object)
+      const response = {
+        status: 'success',
+        data: flattenedTasks
+      };
+
+      // Return as array with single object (as expected by frontend)
+      return res.status(200).json([response]);
+
+    } catch (error) {
+      logger.logError(error, req, {
+        operation: 'getTasks',
+        context: 'Get Tasks API',
+        errorType: 'TasksFetchError',
+        queryParams: req.query
+      });
+      console.error('[Admin] Get tasks error:', error);
+      return res.status(500).json([{
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        error_code: 'INTERNAL_SERVER_ERROR'
+      }]);
+    }
+  }
+
+  // GET /admin/getleaves?page={page}&size={size}
+  // Get all leave applications with employee and leave type information
+  static async getLeaveApplications(req, res) {
+    try {
+      const { page, size } = req.query;
+      
+      // Default pagination values if not provided
+      const pageNum = page ? parseInt(page) : 1;
+      const sizeNum = size ? parseInt(size) : 10;
+
+      // Validate pagination parameters if provided
+      if (page && (isNaN(pageNum) || pageNum < 1)) {
+        return res.status(400).json([{
+          status: 'error',
+          message: 'page must be a valid positive number',
+          error_code: 'INVALID_PARAMETERS'
+        }]);
+      }
+
+      if (size && (isNaN(sizeNum) || sizeNum < 1)) {
+        return res.status(400).json([{
+          status: 'error',
+          message: 'size must be a valid positive number',
+          error_code: 'INVALID_PARAMETERS'
+        }]);
+      }
+
+      console.log(`[Admin] Fetching leave applications - page: ${pageNum}, size: ${sizeNum}`);
+
+      // Calculate pagination
+      const offset = (pageNum - 1) * sizeNum;
+
+      // Fetch leave applications with pagination
+      const { data: leaveApplications, error: leaveError, count } = await supabase
+        .from('leave_applications')
+        .select('*', { count: 'exact' })
+        .order('application_id', { ascending: false })
+        .range(offset, offset + sizeNum - 1);
+
+      if (leaveError) {
+        console.error('[Admin] Error fetching leave applications:', leaveError);
+        return res.status(500).json([{
+          status: 'error',
+          message: 'Failed to fetch leave applications',
+          error_code: 'LEAVE_FETCH_ERROR',
+          error: leaveError.message || 'Unknown error'
+        }]);
+      }
+
+      // Get unique employee_ids and leave_type_ids for batch fetching
+      const employeeIds = [...new Set((leaveApplications || []).map(la => la.employee_id).filter(Boolean))];
+      const leaveTypeIds = [...new Set((leaveApplications || []).map(la => la.leave_type_id).filter(Boolean))];
+
+      // Fetch employees data
+      let employeesMap = {};
+      if (employeeIds.length > 0) {
+        const { data: employees, error: employeesError } = await supabase
+          .from('employees')
+          .select('employee_id, first_name, last_name')
+          .in('employee_id', employeeIds);
+
+        if (!employeesError && employees) {
+          employeesMap = employees.reduce((acc, emp) => {
+            acc[emp.employee_id] = emp;
+            return acc;
+          }, {});
+        }
+      }
+
+      // Fetch leave types data
+      let leaveTypesMap = {};
+      if (leaveTypeIds.length > 0) {
+        const { data: leaveTypes, error: leaveTypesError } = await supabase
+          .from('leave_types')
+          .select('leave_type_id, type_name')
+          .in('leave_type_id', leaveTypeIds);
+
+        if (!leaveTypesError && leaveTypes) {
+          leaveTypesMap = leaveTypes.reduce((acc, lt) => {
+            acc[lt.leave_type_id] = lt;
+            return acc;
+          }, {});
+        }
+      }
+
+      // Format the response to match frontend expectations
+      const formattedLeaves = (leaveApplications || []).map(leave => {
+        const employee = leave.employee_id ? employeesMap[leave.employee_id] : null;
+        const leaveType = leave.leave_type_id ? leaveTypesMap[leave.leave_type_id] : null;
+
+        return {
+          application_id: leave.application_id,
+          employee_id: leave.employee_id,
+          leave_type_id: leave.leave_type_id,
+          start_date: leave.start_date,
+          end_date: leave.end_date,
+          total_days: leave.total_days,
+          reason: leave.reason,
+          status: leave.status || 'pending',
+          applied_date: leave.applied_date,
+          employees: {
+            employee_id: employee?.employee_id || null,
+            first_name: employee?.first_name || '',
+            last_name: employee?.last_name || ''
+          },
+          leave_types: {
+            leave_type_id: leaveType?.leave_type_id || null,
+            type_name: leaveType?.type_name || 'N/A'
+          }
+        };
+      });
+
+      // Build response matching the expected format
+      const response = {
+        status: 'success',
+        message: 'Leave applications retrieved successfully',
+        data: formattedLeaves,
+        pagination: {
+          page: pageNum,
+          size: sizeNum,
+          total: count || 0,
+          totalPages: count ? Math.ceil(count / sizeNum) : 0
+        }
+      };
+
+      // Return as array with single object (as expected by frontend)
+      return res.status(200).json([response]);
+
+    } catch (error) {
+      console.error('[Admin] Get leave applications error:', error);
+      return res.status(500).json([{
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        error_code: 'INTERNAL_ERROR'
+      }]);
+    }
+  }
+
+  // PATCH /admin/updateleavestatus
+  // Update leave application status (approve or reject)
+  static async updateLeaveStatus(req, res) {
+    try {
+      const { application_id, status, approved_by, approved_date, rejection_reason } = req.body;
+      const sessionId = req.headers['session_id'] || req.headers['session-id'];
+      const jwtToken = req.headers['jwt_token'] || req.headers['jwt-token'];
+
+      console.log('[Admin] Updating leave application status:', { application_id, status, approved_by });
+
+      // Validate required fields
+      if (!application_id) {
+        return res.status(400).json([{
+          status: 'error',
+          message: 'application_id is required',
+          error_code: 'MISSING_APPLICATION_ID'
+        }]);
+      }
+
+      if (!status) {
+        return res.status(400).json([{
+          status: 'error',
+          message: 'status is required',
+          error_code: 'MISSING_STATUS'
+        }]);
+      }
+
+      // Validate status value
+      const validStatuses = ['approved', 'rejected', 'pending'];
+      const normalizedStatus = status.toLowerCase();
+      if (!validStatuses.includes(normalizedStatus)) {
+        return res.status(400).json([{
+          status: 'error',
+          message: 'status must be one of: approved, rejected, pending',
+          error_code: 'INVALID_STATUS'
+        }]);
+      }
+
+      // Validate application_id is a number
+      const applicationIdNum = parseInt(application_id);
+      if (isNaN(applicationIdNum) || applicationIdNum < 1) {
+        return res.status(400).json([{
+          status: 'error',
+          message: 'application_id must be a valid positive number',
+          error_code: 'INVALID_APPLICATION_ID'
+        }]);
+      }
+
+      // Check if leave application exists
+      const { data: existingLeave, error: fetchError } = await supabase
+        .from('leave_applications')
+        .select('application_id, status')
+        .eq('application_id', applicationIdNum)
+        .single();
+
+      if (fetchError || !existingLeave) {
+        console.error('[Admin] Error fetching leave application:', fetchError);
+        return res.status(404).json([{
+          status: 'error',
+          message: 'Leave application not found',
+          error_code: 'LEAVE_NOT_FOUND'
+        }]);
+      }
+
+      // Prepare update data
+      const now = new Date().toISOString();
+      const updateData = {
+        status: normalizedStatus,
+        updated_time: now
+      };
+
+      // If approving or rejecting, set approved_by and approved_date
+      if (normalizedStatus === 'approved' || normalizedStatus === 'rejected') {
+        if (approved_by) {
+          const approvedByNum = parseInt(approved_by);
+          if (isNaN(approvedByNum) || approvedByNum < 1) {
+            return res.status(400).json([{
+              status: 'error',
+              message: 'approved_by must be a valid positive number',
+              error_code: 'INVALID_APPROVED_BY'
+            }]);
+          }
+          updateData.approved_by = approvedByNum;
+        }
+
+        if (approved_date) {
+          updateData.approved_date = approved_date;
+        } else {
+          // Use current date if not provided
+          updateData.approved_date = new Date().toISOString().slice(0, 10);
+        }
+
+        // If rejecting, set rejection_reason if provided
+        if (normalizedStatus === 'rejected' && rejection_reason) {
+          updateData.rejection_reason = rejection_reason;
+        } else if (normalizedStatus === 'rejected') {
+          // Clear rejection_reason if not provided (optional)
+          updateData.rejection_reason = null;
+        }
+      } else if (normalizedStatus === 'pending') {
+        // If setting back to pending, clear approval fields
+        updateData.approved_by = null;
+        updateData.approved_date = null;
+        updateData.rejection_reason = null;
+      }
+
+      // Update the leave application
+      const { data: updatedLeave, error: updateError } = await supabase
+        .from('leave_applications')
+        .update(updateData)
+        .eq('application_id', applicationIdNum)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('[Admin] Error updating leave application:', updateError);
+        return res.status(500).json([{
+          status: 'error',
+          message: 'Failed to update leave application',
+          error_code: 'UPDATE_ERROR',
+          error: updateError.message || 'Unknown error'
+        }]);
+      }
+
+      // Build success response
+      const response = {
+        status: 'success',
+        message: `Leave application ${normalizedStatus} successfully`,
+        data: {
+          application_id: updatedLeave.application_id,
+          status: updatedLeave.status,
+          approved_by: updatedLeave.approved_by,
+          approved_date: updatedLeave.approved_date,
+          rejection_reason: updatedLeave.rejection_reason,
+          updated_time: updatedLeave.updated_time
+        }
+      };
+
+      // Return as array with single object (as expected by frontend)
+      return res.status(200).json([response]);
+
+    } catch (error) {
+      console.error('[Admin] Update leave status error:', error);
+      return res.status(500).json([{
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        error_code: 'INTERNAL_ERROR'
+      }]);
+    }
+  }
+}
 export default AdminController;
 
