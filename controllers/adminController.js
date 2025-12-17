@@ -1,5 +1,9 @@
 import supabase from '../config/database.js';
 import SessionModel from '../models/SessionModel.js';
+import logger from '../utils/logger.js';
+import BacklogModel from '../models/BacklogModel.js';
+import BacklogCommentModel from '../models/BacklogCommentModel.js';
+import path from 'path';
 
 class AdminController {
   // GET /admin/admindashboard
@@ -34,6 +38,14 @@ class AdminController {
         .eq('deleted_flag', false);
 
       if (casesError) {
+        logger.logDatabaseError(casesError, 'SELECT', 'cases', {
+          query: 'Fetching cases for dashboard',
+          filters: { deleted_flag: false }
+        });
+        logger.logFailedOperation(req, 500, 'DASHBOARD_FETCH_ERROR', 'Failed to fetch cases data', {
+          operation: 'getAdminDashboard',
+          error: casesError.message || 'Unknown error'
+        });
         console.error('[Admin] Error fetching cases:', casesError);
         return res.status(500).json({
           status: 'error',
@@ -62,6 +74,10 @@ class AdminController {
         .eq('deleted_flag', false);
 
       if (backlogError) {
+        logger.logDatabaseError(backlogError, 'SELECT', 'backlog', {
+          query: 'Fetching backlog items for dashboard',
+          filters: { deleted_flag: false }
+        });
         console.error('[Admin] Error fetching backlog:', backlogError);
         // Set pendingApprovals to 0 if error
         pendingApprovals = 0;
@@ -115,11 +131,17 @@ class AdminController {
       return res.status(200).json([dashboardStats]);
 
     } catch (error) {
+      logger.logError(error, req, {
+        operation: 'getAdminDashboard',
+        context: 'Admin Dashboard API',
+        errorType: 'DashboardFetchError'
+      });
       console.error('[Admin] Get admin dashboard error:', error);
       return res.status(500).json({
         status: 'error',
         message: 'Internal server error: ' + error.message,
-        statusCode: 500
+        statusCode: 500,
+        error_code: 'INTERNAL_SERVER_ERROR'
       });
     }
   }
@@ -143,6 +165,11 @@ class AdminController {
 
       // Validate pagination parameters if provided
       if (page && (isNaN(pageNum) || pageNum < 1)) {
+        logger.logFailedOperation(req, 400, 'INVALID_PARAMETERS', 'page must be a valid positive number', {
+          operation: 'getUsers',
+          providedPage: page,
+          pageNum: pageNum
+        });
         return res.status(400).json([{
           status: 'error',
           message: 'page must be a valid positive number',
@@ -151,6 +178,11 @@ class AdminController {
       }
 
       if (size && (isNaN(sizeNum) || sizeNum < 1)) {
+        logger.logFailedOperation(req, 400, 'INVALID_PARAMETERS', 'size must be a valid positive number', {
+          operation: 'getUsers',
+          providedSize: size,
+          sizeNum: sizeNum
+        });
         return res.status(400).json([{
           status: 'error',
           message: 'size must be a valid positive number',
@@ -172,6 +204,16 @@ class AdminController {
         .range(offset, offset + sizeNum - 1);
 
       if (usersError) {
+        logger.logDatabaseError(usersError, 'SELECT', 'users', {
+          query: 'Fetching users with pagination',
+          page: pageNum,
+          size: sizeNum,
+          offset: offset
+        });
+        logger.logFailedOperation(req, 500, 'USER_FETCH_ERROR', 'Failed to fetch users', {
+          operation: 'getUsers',
+          error: usersError.message
+        });
         console.error('[Admin] Error fetching users:', usersError);
         return res.status(500).json([{
           status: 'error',
@@ -290,6 +332,13 @@ class AdminController {
       return res.status(200).json([response]);
 
     } catch (error) {
+      logger.logError(error, req, {
+        operation: 'getUsers',
+        context: 'Get Users API',
+        errorType: 'UserFetchError',
+        queryParams: req.query,
+        mode: req.query.id ? 'single_user' : 'pagination'
+      });
       console.error('[Admin] Get users error:', error);
       return res.status(500).json([{
         status: 'error',
@@ -305,6 +354,11 @@ class AdminController {
       const userIdNum = parseInt(userId);
 
       if (isNaN(userIdNum) || userIdNum < 1) {
+        logger.logFailedOperation(req, 400, 'INVALID_PARAMETERS', 'id must be a valid positive number', {
+          operation: 'getUserById',
+          providedId: userId,
+          userIdNum: userIdNum
+        });
         return res.status(400).json([{
           status: 'error',
           message: 'id must be a valid positive number',
@@ -323,6 +377,17 @@ class AdminController {
         .single();
 
       if (userError || !user) {
+        if (userError) {
+          logger.logDatabaseError(userError, 'SELECT', 'users', {
+            query: 'Fetching user by ID',
+            user_id: userIdNum
+          });
+        }
+        logger.logFailedOperation(req, 404, 'USER_NOT_FOUND', 'User not found', {
+          operation: 'getUserById',
+          user_id: userIdNum,
+          error: userError?.message || 'User not found'
+        });
         console.error('[Admin] Error fetching user:', userError);
         return res.status(404).json([{
           status: 'error',
@@ -435,6 +500,13 @@ class AdminController {
       return res.status(200).json([response]);
 
     } catch (error) {
+      logger.logError(error, req, {
+        operation: 'getUserById',
+        context: 'Get User By ID API',
+        errorType: 'UserFetchError',
+        userId: userId,
+        sessionId: sessionId
+      });
       console.error('[Admin] Get user by ID error:', error);
       return res.status(500).json([{
         status: 'error',
@@ -499,6 +571,10 @@ class AdminController {
       if (!role) fieldErrors.role = 'Role is required';
 
       if (Object.keys(fieldErrors).length > 0) {
+        logger.logFailedOperation(req, 400, 'VALIDATION_ERROR', 'Validation failed - missing required fields', {
+          operation: 'createUser',
+          fieldErrors: fieldErrors
+        });
         return res.status(400).json([{
           status: 'error',
           message: 'Validation failed',
@@ -510,6 +586,10 @@ class AdminController {
       // Validate email format
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(email_address)) {
+        logger.logFailedOperation(req, 400, 'VALIDATION_ERROR', 'Invalid email format', {
+          operation: 'createUser',
+          email: email_address
+        });
         return res.status(400).json([{
           status: 'error',
           message: 'Validation failed',
@@ -550,6 +630,11 @@ class AdminController {
       if (age !== undefined && age !== null) {
         const ageNum = typeof age === 'string' ? parseInt(age) : age;
         if (isNaN(ageNum) || ageNum < 0) {
+          logger.logFailedOperation(req, 400, 'VALIDATION_ERROR', 'Invalid age value', {
+            operation: 'createUser',
+            providedAge: age,
+            ageNum: ageNum
+          });
           return res.status(400).json([{
             status: 'error',
             message: 'Validation failed',
@@ -568,6 +653,15 @@ class AdminController {
         .or(`email.eq.${email_address},username.eq.${username}`);
 
       if (checkError) {
+        logger.logDatabaseError(checkError, 'SELECT', 'users', {
+          query: 'Checking for existing users with email or username',
+          email: email_address,
+          username: username
+        });
+        logger.logFailedOperation(req, 500, 'INTERNAL_ERROR', 'Failed to check existing users', {
+          operation: 'createUser',
+          error: checkError.message
+        });
         console.error('[Admin] Error checking existing users:', checkError);
         return res.status(500).json([{
           status: 'error',
@@ -587,6 +681,17 @@ class AdminController {
         if (usernameExists) {
           fieldErrors.username = 'Username is already taken';
         }
+        logger.logFailedOperation(req, 409, 'USER_001', 
+          emailExists && usernameExists 
+            ? 'Email and username already exist' 
+            : emailExists 
+              ? 'Email already exists' 
+              : 'Username already exists', {
+          operation: 'createUser',
+          email: email_address,
+          username: username,
+          fieldErrors: fieldErrors
+        });
         return res.status(409).json([{
           status: 'error',
           message: emailExists && usernameExists 
@@ -633,6 +738,10 @@ class AdminController {
         .single();
 
       if (userError || !newUser) {
+        logger.logDatabaseError(userError || new Error('User creation returned null'), 'INSERT', 'users', {
+          query: 'Creating new user',
+          userData: { user_id: nextUserId, email: email_address, username: username, role: normalizedRole }
+        });
         console.error('[Admin] Error creating user:', userError);
         console.error('[Admin] User error details:', JSON.stringify(userError, null, 2));
         return res.status(500).json([{
@@ -674,6 +783,11 @@ class AdminController {
           .insert([employeeData]);
 
         if (employeeError) {
+          logger.logDatabaseError(employeeError, 'INSERT', 'employees', {
+            query: 'Creating employee record for new user',
+            user_id: userId,
+            rollback: 'Deleting user record due to employee creation failure'
+          });
           console.error('[Admin] Error creating employee record:', employeeError);
           // Rollback user creation
           await supabase.from('users').delete().eq('user_id', userId);
@@ -817,6 +931,16 @@ class AdminController {
       }]);
 
     } catch (error) {
+      logger.logError(error, req, {
+        operation: 'createUser',
+        context: 'Create User API',
+        errorType: 'UserCreationError',
+        userData: {
+          email: req.body?.email_address,
+          username: req.body?.username,
+          role: req.body?.role
+        }
+      });
       console.error('[Admin] Create user error:', error);
       return res.status(500).json([{
         status: 'error',
@@ -862,6 +986,9 @@ class AdminController {
 
       // Validate required fields
       if (!user_id) {
+        logger.logFailedOperation(req, 400, 'MISSING_USER_ID', 'user_id is required', {
+          operation: 'updateUser'
+        });
         return res.status(400).json([{
           status: 'error',
           message: 'user_id is required',
@@ -877,6 +1004,17 @@ class AdminController {
         .single();
 
       if (userFetchError || !existingUser) {
+        if (userFetchError) {
+          logger.logDatabaseError(userFetchError, 'SELECT', 'users', {
+            query: 'Fetching user for update',
+            user_id: user_id
+          });
+        }
+        logger.logFailedOperation(req, 404, 'USER_NOT_FOUND', 'User not found', {
+          operation: 'updateUser',
+          user_id: user_id,
+          error: userFetchError?.message || 'User not found'
+        });
         return res.status(404).json([{
           status: 'error',
           message: 'User not found',
@@ -903,6 +1041,16 @@ class AdminController {
         .eq('user_id', user_id);
 
       if (userUpdateError) {
+        logger.logDatabaseError(userUpdateError, 'UPDATE', 'users', {
+          query: 'Updating user',
+          user_id: user_id,
+          updateData: Object.keys(userUpdateData)
+        });
+        logger.logFailedOperation(req, 500, 'USER_UPDATE_ERROR', 'Failed to update user', {
+          operation: 'updateUser',
+          user_id: user_id,
+          error: userUpdateError.message
+        });
         console.error('[Admin] Error updating user:', userUpdateError);
         return res.status(500).json([{
           status: 'error',
@@ -940,6 +1088,16 @@ class AdminController {
           .eq('user_id', user_id);
 
         if (employeeUpdateError) {
+          logger.logDatabaseError(employeeUpdateError, 'UPDATE', 'employees', {
+            query: 'Updating employee record',
+            user_id: user_id
+          });
+          logger.logFailedOperation(req, 500, 'EMPLOYEE_UPDATE_ERROR', 'Failed to update employee record', {
+            operation: 'updateUser',
+            user_id: user_id,
+            role: 'employee',
+            error: employeeUpdateError.message
+          });
           console.error('[Admin] Error updating employee record:', employeeUpdateError);
           return res.status(500).json([{
             status: 'error',
@@ -982,6 +1140,16 @@ class AdminController {
           .eq('user_id', user_id);
 
         if (partnerUpdateError) {
+          logger.logDatabaseError(partnerUpdateError, 'UPDATE', 'partners', {
+            query: 'Updating partner record',
+            user_id: user_id
+          });
+          logger.logFailedOperation(req, 500, 'PARTNER_UPDATE_ERROR', 'Failed to update partner record', {
+            operation: 'updateUser',
+            user_id: user_id,
+            role: 'partner',
+            error: partnerUpdateError.message
+          });
           console.error('[Admin] Error updating partner record:', partnerUpdateError);
           return res.status(500).json([{
             status: 'error',
@@ -1028,6 +1196,16 @@ class AdminController {
           .eq('user_id', user_id);
 
         if (customerUpdateError) {
+          logger.logDatabaseError(customerUpdateError, 'UPDATE', 'customers', {
+            query: 'Updating customer record',
+            user_id: user_id
+          });
+          logger.logFailedOperation(req, 500, 'CUSTOMER_UPDATE_ERROR', 'Failed to update customer record', {
+            operation: 'updateUser',
+            user_id: user_id,
+            role: 'customer',
+            error: customerUpdateError.message
+          });
           console.error('[Admin] Error updating customer record:', customerUpdateError);
           return res.status(500).json([{
             status: 'error',
@@ -1055,6 +1233,16 @@ class AdminController {
           .eq('user_id', user_id);
 
         if (adminUpdateError) {
+          logger.logDatabaseError(adminUpdateError, 'UPDATE', 'admin', {
+            query: 'Updating admin record',
+            user_id: user_id
+          });
+          logger.logFailedOperation(req, 500, 'ADMIN_UPDATE_ERROR', 'Failed to update admin record', {
+            operation: 'updateUser',
+            user_id: user_id,
+            role: 'admin',
+            error: adminUpdateError.message
+          });
           console.error('[Admin] Error updating admin record:', adminUpdateError);
           return res.status(500).json([{
             status: 'error',
@@ -1076,6 +1264,13 @@ class AdminController {
       }]);
 
     } catch (error) {
+      logger.logError(error, req, {
+        operation: 'updateUser',
+        context: 'Update User API',
+        errorType: 'UserUpdateError',
+        userId: req.body?.user_id,
+        role: req.body?.role
+      });
       console.error('[Admin] Update user error:', error);
       return res.status(500).json([{
         status: 'error',
@@ -1097,6 +1292,9 @@ class AdminController {
 
       // Validate user_id parameter
       if (!user_id) {
+        logger.logFailedOperation(req, 400, 'MISSING_USER_ID', 'user_id query parameter is required', {
+          operation: 'deleteUser'
+        });
         return res.status(400).json([{
           status: 'error',
           message: 'user_id query parameter is required',
@@ -1106,6 +1304,11 @@ class AdminController {
 
       const userIdNum = parseInt(user_id);
       if (isNaN(userIdNum) || userIdNum < 1) {
+        logger.logFailedOperation(req, 400, 'INVALID_USER_ID', 'user_id must be a valid positive number', {
+          operation: 'deleteUser',
+          providedUserId: user_id,
+          userIdNum: userIdNum
+        });
         return res.status(400).json([{
           status: 'error',
           message: 'user_id must be a valid positive number',
@@ -1121,6 +1324,17 @@ class AdminController {
         .single();
 
       if (userFetchError || !existingUser) {
+        if (userFetchError) {
+          logger.logDatabaseError(userFetchError, 'SELECT', 'users', {
+            query: 'Fetching user for deletion',
+            user_id: userIdNum
+          });
+        }
+        logger.logFailedOperation(req, 404, 'USER_NOT_FOUND', 'User not found', {
+          operation: 'deleteUser',
+          user_id: userIdNum,
+          error: userFetchError?.message || 'User not found'
+        });
         return res.status(404).json([{
           status: 'error',
           message: 'User not found',
@@ -1129,6 +1343,10 @@ class AdminController {
       }
 
       if (existingUser.deleted_flag === true) {
+        logger.logFailedOperation(req, 400, 'USER_ALREADY_DELETED', 'User is already deleted', {
+          operation: 'deleteUser',
+          user_id: userIdNum
+        });
         return res.status(400).json([{
           status: 'error',
           message: 'User is already deleted',
@@ -1148,6 +1366,16 @@ class AdminController {
         .eq('user_id', userIdNum);
 
       if (deleteError) {
+        logger.logDatabaseError(deleteError, 'UPDATE', 'users', {
+          query: 'Soft deleting user',
+          user_id: userIdNum,
+          operation: 'set deleted_flag = true'
+        });
+        logger.logFailedOperation(req, 500, 'INTERNAL_ERROR', 'Failed to delete user', {
+          operation: 'deleteUser',
+          user_id: userIdNum,
+          error: deleteError.message || 'Unknown error'
+        });
         console.error('[Admin] Error deleting user:', deleteError);
         return res.status(500).json([{
           status: 'error',
@@ -1189,6 +1417,12 @@ class AdminController {
       }]);
 
     } catch (error) {
+      logger.logError(error, req, {
+        operation: 'deleteUser',
+        context: 'Delete User API',
+        errorType: 'UserDeletionError',
+        userId: req.query?.user_id
+      });
       console.error('[Admin] Delete user error:', error);
       return res.status(500).json([{
         status: 'error',
@@ -1447,6 +1681,1559 @@ class AdminController {
         .from('leave_applications')
         .update(updateData)
         .eq('application_id', applicationIdNum)
+        .select()\r\n        .single();\r\n\r\n      if (updateError) {\r\n        console.error('[Admin] Error updating leave application:', updateError);\r\n        return res.status(500).json([{\r\n          status: 'error',\r\n          message: 'Failed to update leave application',\r\n          error_code: 'UPDATE_ERROR',\r\n          error: updateError.message || 'Unknown error'\r\n        }]);\r\n      }\r\n\r\n      // Build success response\r\n      const response = {\r\n        status: 'success',\r\n        message: Leave application ${normalizedStatus} successfully,\r\n        data: {\r\n          application_id: updatedLeave.application_id,\r\n          status: updatedLeave.status,\r\n          approved_by: updatedLeave.approved_by,\r\n          approved_date: updatedLeave.approved_date,\r\n          rejection_reason: updatedLeave.rejection_reason,\r\n          updated_time: updatedLeave.updated_time\r\n        }\r\n      };\r\n\r\n      // Return as array with single object (as expected by frontend)\r\n      return res.status(200).json([response]);\r\n\r\n    } catch (error) {\r\n      console.error('[Admin] Update leave status error:', error);\r\n      return res.status(500).json([{\r\n        status: 'error',\r\n        message: 'Internal server error: ' + error.message,\r\n        error_code: 'INTERNAL_ERROR'\r\n      }]);\r\n    }\r\n  }\r\n\r\n  // GET /admin/gapanalysis?employee_id={employee_id}
+  // Get all backlog/case data for gap analysis in Admin Dashboard
+  // When employee_id=0, returns all cases in the system
+  static async getGapAnalysis(req, res) {
+    try {
+      const { employee_id } = req.query;
+
+      console.log('[Admin] Gap Analysis - Fetching backlog data for employee_id:', employee_id);
+
+      // Validate employee_id parameter
+      if (employee_id === undefined || employee_id === null || employee_id === '') {
+        logger.logFailedOperation(req, 400, 'MISSING_EMPLOYEE_ID', 'employee_id parameter is required', {
+          operation: 'getGapAnalysis'
+        });
+        return res.status(400).json({
+          error: 'Invalid employee_id parameter',
+          message: 'employee_id is required'
+        });
+      }
+
+      const employeeIdNum = parseInt(employee_id);
+      if (isNaN(employeeIdNum) || employeeIdNum < 0) {
+        logger.logFailedOperation(req, 400, 'INVALID_EMPLOYEE_ID', 'employee_id must be a valid number', {
+          operation: 'getGapAnalysis',
+          providedEmployeeId: employee_id
+        });
+        return res.status(400).json({
+          error: 'Invalid employee_id parameter',
+          message: 'employee_id must be a valid number'
+        });
+      }
+
+      // Fetch backlog data - filter out deleted entries
+      let query = supabase
+        .from('backlog')
+        .select('*')
+        .eq('deleted_flag', false);
+
+      if (employeeIdNum === 0) {
+        // Get ALL backlog entries (no filter on assigned_to)
+        console.log('[Admin] Gap Analysis - Fetching ALL backlog entries (employee_id=0)');
+      } else {
+        // Get backlog entries assigned to specific employee
+        query = query.eq('assigned_to', employeeIdNum);
+        console.log(`[Admin] Gap Analysis - Fetching backlog entries for employee_id: ${employeeIdNum}`);
+      }
+
+      const { data: backlogList, error: backlogError } = await query.order('created_time', { ascending: false });
+
+      if (backlogError) {
+        logger.logDatabaseError(backlogError, 'SELECT', 'backlog', {
+          query: 'Fetching backlog data for gap analysis',
+          employee_id: employeeIdNum,
+          filters: { deleted_flag: false }
+        });
+        logger.logFailedOperation(req, 500, 'BACKLOG_FETCH_ERROR', 'Failed to fetch backlog data', {
+          operation: 'getGapAnalysis',
+          error: backlogError.message
+        });
+        console.error('[Admin] Error fetching backlog data:', backlogError);
+        return res.status(500).json({
+          error: 'Internal Server Error',
+          message: 'An error occurred while fetching backlog data'
+        });
+      }
+
+      if (!backlogList || backlogList.length === 0) {
+        return res.status(200).json([]);
+      }
+
+      // Fetch relationships for all backlog entries (similar to BacklogModel.findByEmployeeId)
+      const backlogWithRelations = await Promise.all(
+        backlogList.map(async (backlog) => {
+          // Fetch all relationships for this backlog entry
+          const [caseType, partner, employee, comments, documents] = await Promise.all([
+            // 1. Get case_types by case_type_id
+            backlog.case_type_id
+              ? supabase
+                  .from('case_types')
+                  .select('*')
+                  .eq('case_type_id', backlog.case_type_id)
+                  .single()
+                  .then(({ data, error }) => ({ data, error }))
+                  .catch(() => ({ data: null, error: null }))
+              : Promise.resolve({ data: null, error: null }),
+
+            // 2. Get partners by backlog_referring_partner_id
+            backlog.backlog_referring_partner_id
+              ? supabase
+                  .from('partners')
+                  .select('*')
+                  .eq('partner_id', backlog.backlog_referring_partner_id)
+                  .eq('deleted_flag', false)
+                  .single()
+                  .then(({ data, error }) => ({ data, error }))
+                  .catch(() => ({ data: null, error: null }))
+              : Promise.resolve({ data: null, error: null }),
+
+            // 3. Get employees by assigned_to
+            backlog.assigned_to
+              ? supabase
+                  .from('employees')
+                  .select('*')
+                  .eq('employee_id', backlog.assigned_to)
+                  .eq('deleted_flag', false)
+                  .single()
+                  .then(({ data, error }) => ({ data, error }))
+                  .catch(() => ({ data: null, error: null }))
+              : Promise.resolve({ data: null, error: null }),
+
+            // 4. Get backlog_comments
+            supabase
+              .from('backlog_comments')
+              .select('*')
+              .eq('backlog_id', backlog.backlog_id)
+              .order('created_time', { ascending: false })
+              .then(({ data, error }) => ({ data: data || [], error }))
+              .catch(() => ({ data: [], error: null })),
+
+            // 5. Get backlog_documents (filter out deleted documents)
+            supabase
+              .from('backlog_documents')
+              .select('*')
+              .eq('backlog_id', backlog.backlog_id)
+              .order('upload_time', { ascending: false })
+              .then(({ data, error }) => {
+                const activeDocs = (data || []).filter(doc => doc.deleted_flag !== true);
+                return { 
+                  data: activeDocs.map(doc => ({
+                    ...doc,
+                    access_count: doc.access_count ? (isNaN(parseInt(doc.access_count)) ? doc.access_count : parseInt(doc.access_count)) : 0
+                  })),
+                  error 
+                };
+              })
+              .catch(() => ({ data: [], error: null }))
+          ]);
+
+          // Attach relationships to backlog entry
+          backlog.case_types = caseType.data;
+          backlog.partners = partner.data;
+          backlog.employees = employee.data;
+          backlog.backlog_comments = comments.data || [];
+          backlog.backlog_documents = documents.data || [];
+
+          return backlog;
+        })
+      );
+
+      // Transform and enhance the data according to documentation
+      const transformedData = await Promise.all(
+        backlogWithRelations.map(async (backlog) => {
+          // Get assigned consultant name
+          let assignedConsultantName = null;
+          if (backlog.employees) {
+            const firstName = backlog.employees.first_name || '';
+            const lastName = backlog.employees.last_name || '';
+            assignedConsultantName = `${firstName} ${lastName}`.trim() || null;
+          }
+
+          // Get entity name from multiple sources
+          let entityName = null;
+          if (backlog.partners) {
+            entityName = backlog.partners.entity_name || 
+                        backlog.partners['name of entity'] || 
+                        null;
+          }
+          if (!entityName && backlog.employees) {
+            entityName = backlog.employees.entity_name || null;
+          }
+          if (!entityName && backlog.entity_name) {
+            entityName = backlog.entity_name;
+          }
+
+          // Get partner name
+          let partnerName = null;
+          if (backlog.partners) {
+            partnerName = backlog.partners.partner_name || 
+                         (backlog.partners.first_name && backlog.partners.last_name 
+                           ? `${backlog.partners.first_name} ${backlog.partners.last_name}`.trim()
+                           : null) ||
+                         null;
+          }
+
+          // Fetch customer data if customer_id exists in backlog
+          let customerData = null;
+          if (backlog.customer_id) {
+            try {
+              const { data: customer, error: customerError } = await supabase
+                .from('customers')
+                .select('customer_id, first_name, last_name, email_address')
+                .eq('customer_id', backlog.customer_id)
+                .eq('deleted_flag', false)
+                .single();
+
+              if (!customerError && customer) {
+                customerData = {
+                  customer_id: customer.customer_id,
+                  first_name: customer.first_name || null,
+                  last_name: customer.last_name || null,
+                  email_address: customer.email_address || null
+                };
+              }
+            } catch (err) {
+              // Silently fail if customer fetch fails
+              console.error('[Admin] Error fetching customer:', err);
+            }
+          }
+
+          // Format backlog comments with user names
+          const formattedComments = await Promise.all(
+            (backlog.backlog_comments || []).map(async (comment) => {
+              let createdByName = null;
+              let updatedByName = null;
+
+              // Get created_by user name
+              if (comment.created_by) {
+                try {
+                  const { data: createdByUser } = await supabase
+                    .from('users')
+                    .select('first_name, last_name')
+                    .eq('user_id', comment.created_by)
+                    .single();
+
+                  if (createdByUser) {
+                    const firstName = createdByUser.first_name || '';
+                    const lastName = createdByUser.last_name || '';
+                    createdByName = `${firstName} ${lastName}`.trim() || null;
+                  }
+                } catch (err) {
+                  // Silently fail
+                }
+              }
+
+              // Get updated_by user name
+              if (comment.updated_by) {
+                try {
+                  const { data: updatedByUser } = await supabase
+                    .from('users')
+                    .select('first_name, last_name')
+                    .eq('user_id', comment.updated_by)
+                    .single();
+
+                  if (updatedByUser) {
+                    const firstName = updatedByUser.first_name || '';
+                    const lastName = updatedByUser.last_name || '';
+                    updatedByName = `${firstName} ${lastName}`.trim() || null;
+                  }
+                } catch (err) {
+                  // Silently fail
+                }
+              }
+
+              return {
+                backlog_commentid: comment.backlog_commentid || null,
+                backlog_id: comment.backlog_id || backlog.backlog_id || null,
+                comment_text: comment.comment_text || null,
+                created_by: comment.created_by || null,
+                created_time: comment.created_time || null,
+                createdby_name: createdByName || comment.createdby_name || null,
+                updated_by: comment.updated_by || null,
+                updated_time: comment.updated_time || null,
+                updatedby_name: updatedByName || comment.updatedby_name || null,
+                department: comment.department || null
+              };
+            })
+          );
+
+          // Format backlog documents
+          const formattedDocuments = (backlog.backlog_documents || []).map((doc) => ({
+            document_id: doc.document_id || null,
+            category_id: doc.category_id || null,
+            original_filename: doc.original_filename || null,
+            stored_filename: doc.stored_filename || null,
+            access_count: doc.access_count ? parseInt(doc.access_count) : 0,
+            checksum: doc.checksum || null
+          }));
+
+          // Format case_types
+          const caseTypes = backlog.case_types ? {
+            case_type_id: backlog.case_types.case_type_id || null,
+            case_type_name: backlog.case_types.case_type_name || null
+          } : null;
+
+          // Format partners
+          const partners = backlog.partners ? {
+            partner_id: backlog.partners.partner_id || null,
+            partner_name: partnerName || null,
+            entity_name: backlog.partners.entity_name || backlog.partners['name of entity'] || null,
+            'name of entity': backlog.partners['name of entity'] || backlog.partners.entity_name || null,
+            department: backlog.partners.department || null,
+            partner_type: backlog.partners.partner_type || null
+          } : null;
+
+          // Format employees
+          const employees = backlog.employees ? {
+            employee_id: backlog.employees.employee_id || null,
+            first_name: backlog.employees.first_name || null,
+            last_name: backlog.employees.last_name || null,
+            department: backlog.employees.department || null,
+            entity_name: backlog.employees.entity_name || null
+          } : null;
+
+          // Return formatted backlog entry
+          return {
+            backlog_id: backlog.backlog_id || null,
+            case_summary: backlog.case_summary || null,
+            case_description: backlog.case_description || null,
+            case_type_id: backlog.case_type_id || null,
+            backlog_referring_partner_id: backlog.backlog_referring_partner_id || null,
+            backlog_referral_date: backlog.backlog_referral_date || null,
+            status: backlog.status || null,
+            created_time: backlog.created_time || null,
+            created_by: backlog.created_by || null,
+            updated_by: backlog.updated_by || null,
+            updated_time: backlog.updated_time || null,
+            deleted_flag: backlog.deleted_flag || false,
+            assigned_to: backlog.assigned_to || null,
+            assigned_consultant_name: assignedConsultantName,
+            expert_description: backlog.expert_description || null,
+            partner_name: partnerName,
+            entity_name: entityName,
+            case_types: caseTypes,
+            partners: partners,
+            employees: employees,
+            customers: customerData,
+            backlog_comments: formattedComments,
+            backlog_documents: formattedDocuments
+          };
+        })
+      );
+
+      return res.status(200).json(transformedData);
+
+    } catch (error) {
+      logger.logError(error, req, {
+        operation: 'getGapAnalysis',
+        context: 'Gap Analysis API',
+        errorType: 'GapAnalysisFetchError'
+      });
+      console.error('[Admin] Gap Analysis error:', error);
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'An error occurred while fetching backlog data'
+      });
+    }
+  }
+
+  // GET /admin/backlog_id?backlog_id={backlog_id}
+  // Get detailed information for a specific backlog/case entry by backlog_id
+  // Returns comprehensive data including case details, related entities, comments, and documents
+  static async getBacklogDetail(req, res) {
+    try {
+      const { backlog_id } = req.query;
+
+      console.log('[Admin] Fetching backlog detail for backlog_id:', backlog_id);
+
+      // Validate backlog_id parameter
+      if (!backlog_id || backlog_id === 'undefined' || backlog_id === '') {
+        logger.logFailedOperation(req, 400, 'MISSING_BACKLOG_ID', 'backlog_id parameter is required', {
+          operation: 'getBacklogDetail'
+        });
+        return res.status(400).json({
+          error: 'Invalid backlog_id parameter',
+          message: 'backlog_id is required and must be a valid string'
+        });
+      }
+
+      // Fetch backlog with all nested relationships using BacklogModel
+      const { data: backlogData, error: backlogError } = await BacklogModel.findByBacklogId(backlog_id);
+
+      if (backlogError) {
+        logger.logDatabaseError(backlogError, 'SELECT', 'backlog', {
+          query: 'Fetching backlog detail by backlog_id',
+          backlog_id: backlog_id
+        });
+        logger.logFailedOperation(req, 500, 'BACKLOG_FETCH_ERROR', 'Failed to fetch backlog data', {
+          operation: 'getBacklogDetail',
+          backlog_id: backlog_id,
+          error: backlogError.message
+        });
+        console.error('[Admin] Error fetching backlog:', backlogError);
+        return res.status(500).json({
+          error: 'Internal Server Error',
+          message: 'An error occurred while fetching backlog details'
+        });
+      }
+
+      // Return empty array if not found (as per documentation)
+      if (!backlogData) {
+        return res.status(200).json([]);
+      }
+
+      // Check if backlog is deleted
+      if (backlogData.deleted_flag === true) {
+        return res.status(200).json([]);
+      }
+
+      // Fetch customer data if customer_id exists
+      let customerData = null;
+      if (backlogData.customer_id) {
+        try {
+          const { data: customer, error: customerError } = await supabase
+            .from('customers')
+            .select('customer_id, first_name, last_name, email_address, mobile_number, address')
+            .eq('customer_id', backlogData.customer_id)
+            .eq('deleted_flag', false)
+            .single();
+
+          if (!customerError && customer) {
+            customerData = {
+              customer_id: customer.customer_id,
+              first_name: customer.first_name || null,
+              last_name: customer.last_name || null,
+              email_address: customer.email_address || null,
+              mobile_number: customer.mobile_number || null,
+              address: customer.address || null
+            };
+          }
+        } catch (err) {
+          console.error('[Admin] Error fetching customer:', err);
+        }
+      }
+
+      // Get assigned consultant name
+      let assignedConsultantName = null;
+      if (backlogData.employees) {
+        const firstName = backlogData.employees.first_name || '';
+        const lastName = backlogData.employees.last_name || '';
+        assignedConsultantName = `${firstName} ${lastName}`.trim() || null;
+      }
+
+      // Get partner name
+      let partnerName = null;
+      if (backlogData.partners) {
+        partnerName = backlogData.partners.partner_name || 
+                     (backlogData.partners.first_name && backlogData.partners.last_name 
+                       ? `${backlogData.partners.first_name} ${backlogData.partners.last_name}`.trim()
+                       : null) ||
+                     null;
+      }
+
+      // Format case_types
+      const caseTypes = backlogData.case_types ? {
+        case_type_id: backlogData.case_types.case_type_id || null,
+        case_type_name: backlogData.case_types.case_type_name || null
+      } : null;
+
+      // Format partners with all required fields
+      const partners = backlogData.partners ? {
+        partner_id: backlogData.partners.partner_id || null,
+        partner_name: partnerName || null,
+        entity_name: backlogData.partners.entity_name || backlogData.partners['name of entity'] || null,
+        'name of entity': backlogData.partners['name of entity'] || backlogData.partners.entity_name || null,
+        department: backlogData.partners.department || null,
+        partner_type: backlogData.partners.partner_type || null,
+        email: backlogData.partners.email || null,
+        mobile_number: backlogData.partners.mobile_number || null
+      } : null;
+
+      // Format employees with all required fields
+      const employees = backlogData.employees ? {
+        employee_id: backlogData.employees.employee_id || null,
+        first_name: backlogData.employees.first_name || null,
+        last_name: backlogData.employees.last_name || null,
+        full_name: assignedConsultantName || null,
+        department: backlogData.employees.department || null,
+        email: backlogData.employees.email || null,
+        mobile_number: backlogData.employees.mobile_number || null,
+        entity_name: backlogData.employees.entity_name || null
+      } : null;
+
+      // Format backlog comments with user names
+      const formattedComments = await Promise.all(
+        (backlogData.backlog_comments || []).map(async (comment) => {
+          let createdByName = null;
+          let updatedByName = null;
+
+          // Get created_by user name
+          if (comment.created_by) {
+            try {
+              const { data: createdByUser } = await supabase
+                .from('users')
+                .select('first_name, last_name')
+                .eq('user_id', comment.created_by)
+                .single();
+
+              if (createdByUser) {
+                const firstName = createdByUser.first_name || '';
+                const lastName = createdByUser.last_name || '';
+                createdByName = `${firstName} ${lastName}`.trim() || null;
+              }
+            } catch (err) {
+              // Use existing createdby_name if available
+              createdByName = comment.createdby_name || null;
+            }
+          }
+
+          // Get updated_by user name
+          if (comment.updated_by) {
+            try {
+              const { data: updatedByUser } = await supabase
+                .from('users')
+                .select('first_name, last_name')
+                .eq('user_id', comment.updated_by)
+                .single();
+
+              if (updatedByUser) {
+                const firstName = updatedByUser.first_name || '';
+                const lastName = updatedByUser.last_name || '';
+                updatedByName = `${firstName} ${lastName}`.trim() || null;
+              }
+            } catch (err) {
+              // Use existing updatedby_name if available
+              updatedByName = comment.updatedby_name || null;
+            }
+          }
+
+          return {
+            backlog_commentid: comment.backlog_commentid || null,
+            backlog_id: comment.backlog_id || backlog_id || null,
+            comment_text: comment.comment_text || null,
+            created_by: comment.created_by || null,
+            created_time: comment.created_time || null,
+            createdby_name: createdByName || comment.createdby_name || null,
+            updated_by: comment.updated_by || null,
+            updated_time: comment.updated_time || null,
+            updatedby_name: updatedByName || comment.updatedby_name || null,
+            department: comment.department || null
+          };
+        })
+      );
+
+      // Format backlog documents with document categories
+      const formattedDocuments = await Promise.all(
+        (backlogData.backlog_documents || []).map(async (doc) => {
+          let documentCategory = null;
+
+          // Fetch document category if category_id exists
+          if (doc.category_id) {
+            try {
+              const { data: category, error: categoryError } = await supabase
+                .from('document_categories')
+                .select('category_id, category_name')
+                .eq('category_id', doc.category_id)
+                .single();
+
+              if (!categoryError && category) {
+                documentCategory = {
+                  category_id: category.category_id || null,
+                  category_name: category.category_name || null
+                };
+              }
+            } catch (err) {
+              console.error('[Admin] Error fetching document category:', err);
+            }
+          }
+
+          return {
+            document_id: doc.document_id || null,
+            category_id: doc.category_id || null,
+            original_filename: doc.original_filename || null,
+            stored_filename: doc.stored_filename || null,
+            access_count: doc.access_count ? parseInt(doc.access_count) : 0,
+            checksum: doc.checksum || null,
+            uploaded_by: doc.uploaded_by || null,
+            uploaded_time: doc.upload_time || doc.uploaded_at || null,
+            document_category: documentCategory
+          };
+        })
+      );
+
+      // Build the final response object matching documentation format
+      const responseData = {
+        backlog_id: backlogData.backlog_id || null,
+        case_summary: backlogData.case_summary || null,
+        case_description: backlogData.case_description || null,
+        expert_description: backlogData.expert_description || null,
+        case_type_id: backlogData.case_type_id || null,
+        backlog_referring_partner_id: backlogData.backlog_referring_partner_id || null,
+        backlog_referral_date: backlogData.backlog_referral_date || null,
+        status: backlogData.status || null,
+        created_time: backlogData.created_time || null,
+        created_by: backlogData.created_by || null,
+        updated_by: backlogData.updated_by || null,
+        updated_time: backlogData.updated_time || null,
+        deleted_flag: backlogData.deleted_flag || false,
+        comment_text: backlogData.comment_text || null,
+        feedback: backlogData.feedback || null,
+        assigned_to: backlogData.assigned_to || null,
+        assigned_consultant_name: assignedConsultantName,
+        partner_name: partnerName,
+        case_types: caseTypes,
+        partners: partners,
+        employees: employees,
+        customers: customerData,
+        backlog_comments: formattedComments,
+        backlog_documents: formattedDocuments
+      };
+
+      // Return as array for consistency with documentation
+      return res.status(200).json([responseData]);
+
+    } catch (error) {
+      logger.logError(error, req, {
+        operation: 'getBacklogDetail',
+        context: 'Backlog Detail API',
+        errorType: 'BacklogDetailFetchError',
+        backlog_id: req.query?.backlog_id
+      });
+      console.error('[Admin] Get backlog detail error:', error);
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'An error occurred while fetching backlog details'
+      });
+    }
+  }
+
+  // GET /admin/gettechnicalconsultant
+  // Get all technical consultants (employees) available for assignment
+  static async getTechnicalConsultants(req, res) {
+    try {
+      console.log('[Admin] Fetching technical consultants');
+
+      // Fetch all employees who are technical consultants
+      // Filter by designation containing "consultant" or "technical" (case-insensitive)
+      // Also filter out deleted employees
+      // Use select('*') to get all fields, then filter in response if needed
+      const { data: employees, error } = await supabase
+        .from('employees')
+        .select('*')
+        .or('designation.ilike.%consultant%,designation.ilike.%technical%')
+        .eq('deleted_flag', false)
+        .order('first_name', { ascending: true });
+
+      if (error) {
+        logger.logDatabaseError(error, 'SELECT', 'employees', {
+          query: 'Fetching technical consultants',
+          filter: 'designation contains consultant or technical',
+          errorMessage: error.message,
+          errorCode: error.code
+        });
+        logger.logFailedOperation(req, 500, 'CONSULTANT_FETCH_ERROR', 'Failed to fetch technical consultants', {
+          operation: 'getTechnicalConsultants',
+          error: error.message,
+          errorCode: error.code
+        });
+        console.error('[Admin] Error fetching technical consultants:', error);
+        
+        // Fallback: try fetching all active employees
+        const { data: allEmployees, error: allError } = await supabase
+          .from('employees')
+          .select('*')
+          .eq('deleted_flag', false)
+          .order('first_name', { ascending: true });
+
+        if (allError) {
+          logger.logDatabaseError(allError, 'SELECT', 'employees', {
+            query: 'Fetching all active employees as fallback',
+            errorMessage: allError.message,
+            errorCode: allError.code
+          });
+          return res.status(500).json({
+            error: 'Internal Server Error',
+            message: 'Failed to fetch technical consultants'
+          });
+        }
+
+        // Return all active employees if specific filter doesn't work
+        return res.status(200).json(allEmployees || []);
+      }
+
+      // If no employees found with consultant designation, fetch all active employees
+      if (!employees || employees.length === 0) {
+        console.log('[Admin] No consultants found with designation filter, fetching all active employees');
+        const { data: allEmployees, error: allError } = await supabase
+          .from('employees')
+          .select('*')
+          .eq('deleted_flag', false)
+          .order('first_name', { ascending: true });
+
+        if (allError) {
+          logger.logDatabaseError(allError, 'SELECT', 'employees', {
+            query: 'Fetching all active employees as fallback',
+            errorMessage: allError.message,
+            errorCode: allError.code
+          });
+          return res.status(500).json({
+            error: 'Internal Server Error',
+            message: 'Failed to fetch technical consultants'
+          });
+        }
+
+        return res.status(200).json(allEmployees || []);
+      }
+
+      // Return technical consultants
+      return res.status(200).json(employees || []);
+
+    } catch (error) {
+      logger.logError(error, req, {
+        operation: 'getTechnicalConsultants',
+        context: 'Get Technical Consultants API',
+        errorType: 'ConsultantFetchError'
+      });
+      console.error('[Admin] Get technical consultants error:', error);
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Failed to fetch technical consultants'
+      });
+    }
+  }
+
+  // PATCH /admin/update_backlog
+  // Update backlog case summary, description, and case type (Policy Type)
+  static async updateBacklog(req, res) {
+    try {
+      const { backlog_id, case_summary, case_description, case_type_id } = req.body;
+
+      console.log('[Admin] Updating backlog:', { backlog_id, case_summary, case_description, case_type_id });
+
+      // Validate required fields
+      if (!backlog_id) {
+        logger.logFailedOperation(req, 400, 'MISSING_BACKLOG_ID', 'backlog_id is required', {
+          operation: 'updateBacklog'
+        });
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'backlog_id is required'
+        });
+      }
+
+      // Check if backlog exists
+      const { data: existingBacklog, error: fetchError } = await supabase
+        .from('backlog')
+        .select('backlog_id, deleted_flag')
+        .eq('backlog_id', backlog_id)
+        .single();
+
+      if (fetchError || !existingBacklog) {
+        logger.logFailedOperation(req, 404, 'BACKLOG_NOT_FOUND', 'Backlog not found', {
+          operation: 'updateBacklog',
+          backlog_id: backlog_id
+        });
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Backlog with ID ${backlog_id} not found`
+        });
+      }
+
+      if (existingBacklog.deleted_flag === true) {
+        logger.logFailedOperation(req, 404, 'BACKLOG_DELETED', 'Backlog is deleted', {
+          operation: 'updateBacklog',
+          backlog_id: backlog_id
+        });
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Backlog with ID ${backlog_id} not found`
+        });
+      }
+
+      // Prepare update data
+      const updateData = {
+        updated_time: new Date().toISOString()
+      };
+
+      if (case_summary !== undefined && case_summary !== null) {
+        updateData.case_summary = case_summary;
+      }
+
+      if (case_description !== undefined && case_description !== null) {
+        updateData.case_description = case_description;
+      }
+
+      if (case_type_id !== undefined && case_type_id !== null) {
+        const caseTypeIdNum = parseInt(case_type_id);
+        if (!isNaN(caseTypeIdNum) && caseTypeIdNum > 0) {
+          // Validate case_type_id exists
+          const { data: caseType, error: caseTypeError } = await supabase
+            .from('case_types')
+            .select('case_type_id')
+            .eq('case_type_id', caseTypeIdNum)
+            .single();
+
+          if (caseTypeError || !caseType) {
+            logger.logFailedOperation(req, 400, 'INVALID_CASE_TYPE', 'Invalid case_type_id', {
+              operation: 'updateBacklog',
+              case_type_id: caseTypeIdNum
+            });
+            return res.status(400).json({
+              error: 'Bad Request',
+              message: `Invalid case_type_id: ${caseTypeIdNum} does not exist`
+            });
+          }
+
+          updateData.case_type_id = caseTypeIdNum;
+        }
+      }
+
+      // Update backlog entry
+      const { data: updatedBacklog, error: updateError } = await BacklogModel.update(backlog_id, updateData);
+
+      if (updateError) {
+        logger.logDatabaseError(updateError, 'UPDATE', 'backlog', {
+          query: 'Updating backlog policy type',
+          backlog_id: backlog_id,
+          updateData: Object.keys(updateData)
+        });
+        logger.logFailedOperation(req, 500, 'BACKLOG_UPDATE_ERROR', 'Failed to update backlog', {
+          operation: 'updateBacklog',
+          backlog_id: backlog_id,
+          error: updateError.message
+        });
+        console.error('[Admin] Error updating backlog:', updateError);
+        return res.status(500).json({
+          error: 'Internal Server Error',
+          message: 'Failed to update backlog'
+        });
+      }
+
+      if (!updatedBacklog) {
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Backlog with ID ${backlog_id} not found`
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Backlog updated successfully',
+        data: {
+          backlog_id: updatedBacklog.backlog_id,
+          case_summary: updatedBacklog.case_summary,
+          case_description: updatedBacklog.case_description,
+          case_type_id: updatedBacklog.case_type_id,
+          updated_time: updatedBacklog.updated_time
+        }
+      });
+
+    } catch (error) {
+      logger.logError(error, req, {
+        operation: 'updateBacklog',
+        context: 'Update Backlog API',
+        errorType: 'BacklogUpdateError',
+        backlog_id: req.body?.backlog_id
+      });
+      console.error('[Admin] Update backlog error:', error);
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Failed to update backlog'
+      });
+    }
+  }
+
+  // PATCH /admin/updatecunsultantpolicy
+  // Assign consultant to a backlog/case
+  static async updateConsultantPolicy(req, res) {
+    try {
+      const { backlog_id, assigned_consultant_name, assigned_to, updated_by, user_id } = req.body;
+
+      console.log('[Admin] Updating consultant policy:', { backlog_id, assigned_consultant_name, assigned_to });
+
+      // Validate required fields
+      if (!backlog_id) {
+        logger.logFailedOperation(req, 400, 'MISSING_BACKLOG_ID', 'backlog_id is required', {
+          operation: 'updateConsultantPolicy'
+        });
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'backlog_id is required'
+        });
+      }
+
+      // Check if backlog exists
+      const { data: existingBacklog, error: fetchError } = await supabase
+        .from('backlog')
+        .select('backlog_id, deleted_flag')
+        .eq('backlog_id', backlog_id)
+        .single();
+
+      if (fetchError || !existingBacklog) {
+        logger.logFailedOperation(req, 404, 'BACKLOG_NOT_FOUND', 'Backlog not found', {
+          operation: 'updateConsultantPolicy',
+          backlog_id: backlog_id
+        });
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Backlog with ID ${backlog_id} not found`
+        });
+      }
+
+      // Prepare update data
+      const updateData = {
+        updated_time: new Date().toISOString()
+      };
+
+      // Add assigned_consultant_name if provided
+      if (assigned_consultant_name !== undefined && assigned_consultant_name !== null) {
+        updateData.assigned_consultant_name = assigned_consultant_name;
+      }
+
+      // Add assigned_to if provided
+      if (assigned_to !== undefined && assigned_to !== null) {
+        const assignedToNum = parseInt(assigned_to);
+        if (!isNaN(assignedToNum) && assignedToNum > 0) {
+          // Validate employee exists
+          const { data: employee, error: employeeError } = await supabase
+            .from('employees')
+            .select('employee_id, first_name, last_name')
+            .eq('employee_id', assignedToNum)
+            .eq('deleted_flag', false)
+            .single();
+
+          if (employeeError || !employee) {
+            logger.logFailedOperation(req, 400, 'INVALID_EMPLOYEE_ID', 'Invalid assigned_to employee_id', {
+              operation: 'updateConsultantPolicy',
+              assigned_to: assignedToNum
+            });
+            return res.status(400).json({
+              error: 'Bad Request',
+              message: `Invalid assigned_to: Employee ID ${assignedToNum} does not exist`
+            });
+          }
+
+          updateData.assigned_to = assignedToNum;
+
+          // Auto-set assigned_consultant_name if not provided
+          if (!assigned_consultant_name && employee) {
+            const firstName = employee.first_name || '';
+            const lastName = employee.last_name || '';
+            updateData.assigned_consultant_name = `${firstName} ${lastName}`.trim() || null;
+          }
+        }
+      } else if (user_id !== undefined && user_id !== null) {
+        // Fallback to user_id if assigned_to not provided
+        const userIdNum = parseInt(user_id);
+        if (!isNaN(userIdNum) && userIdNum > 0) {
+          updateData.assigned_to = userIdNum;
+        }
+      }
+
+      // Add updated_by if provided
+      if (updated_by !== undefined && updated_by !== null) {
+        updateData.updated_by = updated_by;
+      }
+
+      // Update backlog entry
+      const { data: updatedBacklog, error: updateError } = await BacklogModel.update(backlog_id, updateData);
+
+      if (updateError) {
+        logger.logDatabaseError(updateError, 'UPDATE', 'backlog', {
+          query: 'Updating consultant assignment',
+          backlog_id: backlog_id,
+          updateData: Object.keys(updateData)
+        });
+        logger.logFailedOperation(req, 500, 'CONSULTANT_UPDATE_ERROR', 'Failed to update consultant policy', {
+          operation: 'updateConsultantPolicy',
+          backlog_id: backlog_id,
+          error: updateError.message
+        });
+        console.error('[Admin] Error updating consultant policy:', updateError);
+        return res.status(500).json({
+          error: 'Internal Server Error',
+          message: 'Failed to update consultant policy'
+        });
+      }
+
+      if (!updatedBacklog) {
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Backlog with ID ${backlog_id} not found`
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Consultant assigned successfully',
+        data: {
+          backlog_id: updatedBacklog.backlog_id,
+          assigned_to: updatedBacklog.assigned_to,
+          assigned_consultant_name: updatedBacklog.assigned_consultant_name,
+          updated_time: updatedBacklog.updated_time
+        }
+      });
+
+    } catch (error) {
+      logger.logError(error, req, {
+        operation: 'updateConsultantPolicy',
+        context: 'Update Consultant Policy API',
+        errorType: 'ConsultantUpdateError',
+        backlog_id: req.body?.backlog_id
+      });
+      console.error('[Admin] Update consultant policy error:', error);
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Failed to update consultant policy'
+      });
+    }
+  }
+
+  // PATCH /admin/updatestatustechnicalconsultant
+  // Update backlog status and/or expert description
+  static async updateStatusTechnicalConsultant(req, res) {
+    try {
+      const { backlog_id, status, expert_description, updated_by, user_id } = req.body;
+
+      console.log('[Admin] Updating backlog status/expert description:', { backlog_id, status, expert_description });
+
+      // Validate required fields
+      if (!backlog_id) {
+        logger.logFailedOperation(req, 400, 'MISSING_BACKLOG_ID', 'backlog_id is required', {
+          operation: 'updateStatusTechnicalConsultant'
+        });
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'backlog_id is required'
+        });
+      }
+
+      // Check if backlog exists
+      const { data: existingBacklog, error: fetchError } = await supabase
+        .from('backlog')
+        .select('backlog_id, deleted_flag')
+        .eq('backlog_id', backlog_id)
+        .single();
+
+      if (fetchError || !existingBacklog) {
+        logger.logFailedOperation(req, 404, 'BACKLOG_NOT_FOUND', 'Backlog not found', {
+          operation: 'updateStatusTechnicalConsultant',
+          backlog_id: backlog_id
+        });
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Backlog with ID ${backlog_id} not found`
+        });
+      }
+
+      // Prepare update data
+      const updateData = {
+        updated_time: new Date().toISOString()
+      };
+
+      // Add status if provided
+      if (status !== undefined && status !== null && status !== '') {
+        updateData.status = status;
+      }
+
+      // Add expert_description if provided
+      if (expert_description !== undefined && expert_description !== null && expert_description !== '') {
+        updateData.expert_description = expert_description;
+      }
+
+      // Add updated_by if provided
+      if (updated_by !== undefined && updated_by !== null && updated_by !== '') {
+        updateData.updated_by = updated_by;
+      } else if (user_id !== undefined && user_id !== null) {
+        const userIdNum = parseInt(user_id);
+        if (!isNaN(userIdNum) && userIdNum > 0) {
+          updateData.updated_by = userIdNum;
+        }
+      }
+
+      // Update backlog entry
+      const { data: updatedBacklog, error: updateError } = await BacklogModel.update(backlog_id, updateData);
+
+      if (updateError) {
+        logger.logDatabaseError(updateError, 'UPDATE', 'backlog', {
+          query: 'Updating backlog status/expert description',
+          backlog_id: backlog_id,
+          updateData: Object.keys(updateData)
+        });
+        logger.logFailedOperation(req, 500, 'STATUS_UPDATE_ERROR', 'Failed to update backlog status', {
+          operation: 'updateStatusTechnicalConsultant',
+          backlog_id: backlog_id,
+          error: updateError.message
+        });
+        console.error('[Admin] Error updating backlog status:', updateError);
+        return res.status(500).json({
+          error: 'Internal Server Error',
+          message: 'Failed to update backlog'
+        });
+      }
+
+      if (!updatedBacklog) {
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Backlog with ID ${backlog_id} not found`
+        });
+      }
+
+      const responseMessage = expert_description 
+        ? 'Expert summary added successfully' 
+        : 'Status updated successfully';
+
+      return res.status(200).json({
+        success: true,
+        message: responseMessage,
+        data: {
+          backlog_id: updatedBacklog.backlog_id,
+          status: updatedBacklog.status,
+          expert_description: updatedBacklog.expert_description,
+          updated_time: updatedBacklog.updated_time
+        }
+      });
+
+    } catch (error) {
+      logger.logError(error, req, {
+        operation: 'updateStatusTechnicalConsultant',
+        context: 'Update Status Technical Consultant API',
+        errorType: 'StatusUpdateError',
+        backlog_id: req.body?.backlog_id
+      });
+      console.error('[Admin] Update status technical consultant error:', error);
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Failed to update backlog'
+      });
+    }
+  }
+
+  // POST /admin/comments_insert
+  // Add a comment to a backlog/case
+  static async insertComment(req, res) {
+    try {
+      const {
+        backlog_id,
+        comment_text,
+        created_by,
+        createdby_name,
+        updated_by,
+        updatedby_name,
+        department,
+        email,
+        role
+      } = req.body;
+
+      console.log('[Admin] Inserting comment:', { backlog_id, created_by, department });
+
+      // Validate required fields
+      if (!backlog_id) {
+        logger.logFailedOperation(req, 400, 'MISSING_BACKLOG_ID', 'backlog_id is required', {
+          operation: 'insertComment'
+        });
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'backlog_id is required in request body'
+        });
+      }
+
+      if (!comment_text || comment_text.trim() === '') {
+        logger.logFailedOperation(req, 400, 'MISSING_COMMENT_TEXT', 'comment_text is required', {
+          operation: 'insertComment'
+        });
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'comment_text is required and cannot be empty'
+        });
+      }
+
+      // Validate backlog exists
+      const { data: existingBacklog, error: fetchError } = await supabase
+        .from('backlog')
+        .select('backlog_id, deleted_flag')
+        .eq('backlog_id', backlog_id)
+        .single();
+
+      if (fetchError || !existingBacklog) {
+        logger.logFailedOperation(req, 404, 'BACKLOG_NOT_FOUND', 'Backlog not found', {
+          operation: 'insertComment',
+          backlog_id: backlog_id
+        });
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Backlog with ID ${backlog_id} not found`
+        });
+      }
+
+      if (existingBacklog.deleted_flag === true) {
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Backlog with ID ${backlog_id} not found`
+        });
+      }
+
+      // Validate created_by and updated_by if provided
+      if (created_by) {
+        const { data: userCheck } = await supabase
+          .from('users')
+          .select('user_id')
+          .eq('user_id', parseInt(created_by))
+          .single();
+
+        if (!userCheck) {
+          console.warn(`[Admin] Warning: created_by ${created_by} does not exist in users table`);
+        }
+      }
+
+      if (updated_by) {
+        const { data: userCheck } = await supabase
+          .from('users')
+          .select('user_id')
+          .eq('user_id', parseInt(updated_by))
+          .single();
+
+        if (!userCheck) {
+          console.warn(`[Admin] Warning: updated_by ${updated_by} does not exist in users table`);
+        }
+      }
+
+      // Prepare comment data
+      const commentData = {
+        backlog_id: backlog_id,
+        comment_text: comment_text.trim(),
+        created_by: created_by ? parseInt(created_by) : null,
+        updated_by: updated_by ? parseInt(updated_by) : (created_by ? parseInt(created_by) : null),
+        createdby_name: createdby_name || null,
+        updatedby_name: updatedby_name || createdby_name || null,
+        department: department || 'admin',
+        created_time: new Date().toISOString(),
+        updated_time: new Date().toISOString()
+      };
+
+      // Insert comment into database
+      const { data: insertedComment, error: insertError } = await BacklogCommentModel.create(commentData);
+
+      if (insertError) {
+        logger.logDatabaseError(insertError, 'INSERT', 'backlog_comments', {
+          query: 'Inserting backlog comment',
+          backlog_id: backlog_id
+        });
+        logger.logFailedOperation(req, 500, 'COMMENT_INSERT_ERROR', 'Failed to insert comment', {
+          operation: 'insertComment',
+          backlog_id: backlog_id,
+          error: insertError.message
+        });
+        console.error('[Admin] Error inserting comment:', insertError);
+        return res.status(500).json({
+          error: 'Internal Server Error',
+          message: 'Failed to add comment'
+        });
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Comment added successfully',
+        data: {
+          backlog_commentid: insertedComment.backlog_commentid,
+          backlog_id: insertedComment.backlog_id,
+          comment_text: insertedComment.comment_text,
+          created_by: insertedComment.created_by,
+          created_time: insertedComment.created_time,
+          createdby_name: insertedComment.createdby_name,
+          updated_by: insertedComment.updated_by,
+          updated_time: insertedComment.updated_time,
+          updatedby_name: insertedComment.updatedby_name,
+          department: insertedComment.department
+        }
+      });
+
+    } catch (error) {
+      logger.logError(error, req, {
+        operation: 'insertComment',
+        context: 'Insert Comment API',
+        errorType: 'CommentInsertError',
+        backlog_id: req.body?.backlog_id
+      });
+      console.error('[Admin] Insert comment error:', error);
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'Failed to add comment'
+      });
+    }
+  }
+
+  // POST /admin/documentview
+  // View backlog document by document_id - Returns document URL or file data
+  static async viewDocument(req, res) {
+    try {
+      const { document_id } = req.body;
+
+      console.log('[Admin] View document request:', { document_id });
+
+      // Validate required fields
+      if (!document_id) {
+        logger.logFailedOperation(req, 400, 'MISSING_DOCUMENT_ID', 'document_id is required', {
+          operation: 'viewDocument'
+        });
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'document_id is required',
+          code: 'MISSING_DOCUMENT_ID'
+        });
+      }
+
+      const documentIdNum = parseInt(document_id);
+      if (isNaN(documentIdNum) || documentIdNum < 1) {
+        logger.logFailedOperation(req, 400, 'INVALID_DOCUMENT_ID', 'Invalid document_id', {
+          operation: 'viewDocument',
+          document_id: document_id
+        });
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'Invalid document_id',
+          code: 'INVALID_DOCUMENT_ID'
+        });
+      }
+
+      console.log(`[Admin] Fetching backlog document_id: ${documentIdNum}`);
+
+      // Get document from backlog_documents table
+      const { data: document, error: docError } = await supabase
+        .from('backlog_documents')
+        .select('*')
+        .eq('document_id', documentIdNum)
+        .eq('deleted_flag', false)
+        .single();
+
+      if (docError || !document) {
+        logger.logDatabaseError(docError, 'SELECT', 'backlog_documents', {
+          query: 'Fetching document by document_id',
+          document_id: documentIdNum
+        });
+        logger.logFailedOperation(req, 404, 'DOCUMENT_NOT_FOUND', 'Document not found', {
+          operation: 'viewDocument',
+          document_id: documentIdNum,
+          error: docError?.message
+        });
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Document with ID ${documentIdNum} not found`,
+          code: 'DOCUMENT_NOT_FOUND'
+        });
+      }
+
+      // Fetch document category if category_id exists
+      let categoryName = null;
+      if (document.category_id) {
+        try {
+          const { data: category, error: categoryError } = await supabase
+            .from('document_categories')
+            .select('category_id, category_name')
+            .eq('category_id', document.category_id)
+            .single();
+
+          if (!categoryError && category) {
+            categoryName = category.category_name;
+          }
+        } catch (err) {
+          console.error('[Admin] Error fetching document category:', err);
+        }
+      }
+
+      // Increment access count
+      const currentAccessCount = document.access_count ? parseInt(document.access_count) : 0;
+      await supabase
+        .from('backlog_documents')
+        .update({ access_count: currentAccessCount + 1 })
+        .eq('document_id', documentIdNum);
+
+      // Get file path from document
+      const filePath = document.file_path || document.stored_filename;
+      
+      if (!filePath) {
+        logger.logFailedOperation(req, 404, 'FILE_PATH_NOT_FOUND', 'Document file path not found', {
+          operation: 'viewDocument',
+          document_id: documentIdNum
+        });
+        return res.status(404).json({
+          error: 'Not Found',
+          message: 'Document file path not found',
+          code: 'FILE_PATH_NOT_FOUND'
+        });
+      }
+
+      // Determine content type from file extension
+      const ext = path.extname(filePath).toLowerCase();
+      const contentTypeMap = {
+        '.pdf': 'application/pdf',
+        '.jpg': 'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.png': 'image/png',
+        '.gif': 'image/gif',
+        '.webp': 'image/webp',
+        '.doc': 'application/msword',
+        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        '.txt': 'text/plain',
+        '.xls': 'application/vnd.ms-excel',
+        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+      };
+      const contentType = contentTypeMap[ext] || 'application/octet-stream';
+
+      // If it's already a full URL, return it directly
+      if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+        return res.status(200).json({
+          success: true,
+          url: filePath,
+          document_url: filePath,
+          document_id: document.document_id,
+          original_filename: document.original_filename || null,
+          stored_filename: document.stored_filename || null,
+          content_type: contentType,
+          access_count: currentAccessCount + 1,
+          uploaded_time: document.upload_time || document.uploaded_at || null,
+          uploaded_by: document.uploaded_by || null,
+          category_id: document.category_id || null,
+          category_name: categoryName || null
+        });
+      }
+
+      // Construct Supabase storage URL
+      // Try to extract bucket name from path or use default
+      let bucketName = 'backlog-documents'; // Default bucket
+      
+      // Check if path contains bucket name pattern (e.g., "bk-{backlog_id}/...")
+      if (filePath.includes('bk-')) {
+        bucketName = 'backlog-documents';
+      }
+
+      // Get Supabase URL from environment or config
+      const supabaseUrl = process.env.SUPABASE_URL || '';
+      
+      if (supabaseUrl) {
+        // Construct public URL
+        const publicUrl = `${supabaseUrl}/storage/v1/object/public/${bucketName}/${filePath}`;
+        
+        return res.status(200).json({
+          success: true,
+          url: publicUrl,
+          document_url: publicUrl,
+          document_id: document.document_id,
+          original_filename: document.original_filename || null,
+          stored_filename: document.stored_filename || null,
+          content_type: contentType,
+          file_size: document.file_size ? parseInt(document.file_size) : null,
+          access_count: currentAccessCount + 1,
+          uploaded_time: document.upload_time || document.uploaded_at || null,
+          uploaded_by: document.uploaded_by || null,
+          category_id: document.category_id || null,
+          category_name: categoryName || null
+        });
+      } else {
+        // If no Supabase URL, return relative path
+        return res.status(200).json({
+          success: true,
+          url: filePath,
+          document_url: filePath,
+          document_id: document.document_id,
+          original_filename: document.original_filename || null,
+          stored_filename: document.stored_filename || null,
+          content_type: contentType,
+          file_size: document.file_size ? parseInt(document.file_size) : null,
+          access_count: currentAccessCount + 1,
+          uploaded_time: document.upload_time || document.uploaded_at || null,
+          uploaded_by: document.uploaded_by || null,
+          category_id: document.category_id || null,
+          category_name: categoryName || null
+        });
+      }
+
+    } catch (error) {
+      logger.logError(error, req, {
+        operation: 'viewDocument',
+        context: 'View Document API',
+        errorType: 'DocumentViewError',
+        document_id: req.body?.document_id
+      });
+      console.error('[Admin] View document error:', error);
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'An error occurred while retrieving the document',
+        code: 'INTERNAL_ERROR'
+      });
+    }
+  }
+
+  // DELETE /admin/deletecase or PATCH /admin/deletecase
+  // Delete a backlog/case entry by setting deleted_flag = true (soft delete)
+  static async deleteCase(req, res) {
+    try {
+      const { backlog_id } = req.body;
+
+      console.log('[Admin] Deleting case:', { backlog_id });
+
+      // Validate required fields
+      if (!backlog_id) {
+        logger.logFailedOperation(req, 400, 'MISSING_BACKLOG_ID', 'backlog_id is required', {
+          operation: 'deleteCase'
+        });
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: 'backlog_id is required',
+          code: 'MISSING_BACKLOG_ID'
+        });
+      }
+
+      // Check if backlog exists and is not already deleted
+      const { data: existingBacklog, error: fetchError } = await supabase
+        .from('backlog')
+        .select('backlog_id, case_summary, deleted_flag')
+        .eq('backlog_id', backlog_id)
+        .single();
+
+      if (fetchError || !existingBacklog) {
+        logger.logDatabaseError(fetchError, 'SELECT', 'backlog', {
+          query: 'Fetching backlog for deletion',
+          backlog_id: backlog_id
+        });
+        logger.logFailedOperation(req, 404, 'CASE_NOT_FOUND', 'Case not found', {
+          operation: 'deleteCase',
+          backlog_id: backlog_id,
+          error: fetchError?.message
+        });
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Case with ID '${backlog_id}' not found`,
+          code: 'CASE_NOT_FOUND'
+        });
+      }
+
+      if (existingBacklog.deleted_flag === true) {
+        logger.logFailedOperation(req, 404, 'CASE_ALREADY_DELETED', 'Case is already deleted', {
+          operation: 'deleteCase',
+          backlog_id: backlog_id
+        });
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Case with ID '${backlog_id}' not found`,
+          code: 'CASE_NOT_FOUND'
+        });
+      }
+
+      // Get current user ID from headers, session, or request body
+      // backlog table has updated_by field (text type) but not deleted_by
+      const deletedBy = req.body.deleted_by || req.body.user_id || req.user?.user_id || null;
+      const now = new Date().toISOString();
+
+      // Perform soft delete - update deleted_flag to true
+      // Note: backlog table doesn't have deleted_time or deleted_by columns
+      // We use updated_time and updated_by to track deletion
+      const updateData = {
+        deleted_flag: true,
+        updated_time: now
+      };
+
+      // Add updated_by if provided (this will track who deleted it)
+      if (deletedBy) {
+        updateData.updated_by = deletedBy.toString();
+      }
+
+      const { data: updatedBacklog, error: updateError } = await supabase
+        .from('backlog')
+        .update(updateData)
+        .eq('backlog_id', backlog_id)
         .select()
         .single();
 
@@ -1484,6 +3271,82 @@ class AdminController {
         message: 'Internal server error: ' + error.message,
         error_code: 'INTERNAL_ERROR'
       }]);
+        .select()\r\n        .single();\r\n\r\n      if (updateError) {\r\n        console.error('[Admin] Error updating leave application:', updateError);\r\n        return res.status(500).json([{\r\n          status: 'error',\r\n          message: 'Failed to update leave application',\r\n          error_code: 'UPDATE_ERROR',\r\n          error: updateError.message || 'Unknown error'\r\n        }]);\r\n      }\r\n\r\n      // Build success response\r\n      const response = {\r\n        status: 'success',\r\n        message: Leave application ${normalizedStatus} successfully,\r\n        data: {\r\n          application_id: updatedLeave.application_id,\r\n          status: updatedLeave.status,\r\n          approved_by: updatedLeave.approved_by,\r\n          approved_date: updatedLeave.approved_date,\r\n          rejection_reason: updatedLeave.rejection_reason,\r\n          updated_time: updatedLeave.updated_time\r\n        }\r\n      };\r\n\r\n      // Return as array with single object (as expected by frontend)\r\n      return res.status(200).json([response]);\r\n\r\n    } catch (error) {\r\n      console.error('[Admin] Update leave status error:', error);\r\n      return res.status(500).json([{\r\n        status: 'error',\r\n        message: 'Internal server error: ' + error.message,\r\n        error_code: 'INTERNAL_ERROR'\r\n      }]);\r\n    }\r\n  }\r\n\r\n        logger.logDatabaseError(updateError, 'UPDATE', 'backlog', {
+          query: 'Soft deleting backlog',
+          backlog_id: backlog_id,
+          updateData: Object.keys(updateData)
+        });
+        logger.logFailedOperation(req, 500, 'DELETE_ERROR', 'Failed to delete case', {
+          operation: 'deleteCase',
+          backlog_id: backlog_id,
+          error: updateError.message
+        });
+        console.error('[Admin] Error deleting case:', updateError);
+        return res.status(500).json({
+          error: 'Internal Server Error',
+          message: 'An error occurred while deleting the case',
+          code: 'INTERNAL_ERROR'
+        });
+      }
+
+      if (!updatedBacklog) {
+        return res.status(404).json({
+          error: 'Not Found',
+          message: `Case with ID '${backlog_id}' not found`,
+          code: 'CASE_NOT_FOUND'
+        });
+      }
+
+      // Optionally soft delete related records (comments and documents)
+      // Note: backlog_comments table doesn't have deleted_flag column
+      // So we skip soft deleting comments (they remain for audit trail)
+      
+      // Soft delete documents (backlog_documents has deleted_flag column)
+      try {
+        const { error: docDeleteError } = await supabase
+          .from('backlog_documents')
+          .update({ deleted_flag: true })
+          .eq('backlog_id', backlog_id)
+          .eq('deleted_flag', false);
+
+        if (docDeleteError) {
+          console.error('[Admin] Error soft deleting documents:', docDeleteError);
+          // Log but don't fail the request
+          logger.logDatabaseError(docDeleteError, 'UPDATE', 'backlog_documents', {
+            query: 'Soft deleting documents for deleted backlog',
+            backlog_id: backlog_id
+          });
+        }
+      } catch (err) {
+        console.error('[Admin] Error soft deleting documents:', err);
+        // Continue even if documents deletion fails
+      }
+
+      return res.status(200).json({
+        success: true,
+        message: `Case ${backlog_id} has been deleted successfully`,
+        data: {
+          backlog_id: backlog_id,
+          case_summary: existingBacklog.case_summary || null,
+          deleted_flag: true,
+          deleted_time: updatedBacklog.updated_time || now,
+          deleted_by: deletedBy || updatedBacklog.updated_by || null
+        }
+      });
+
+    } catch (error) {
+      logger.logError(error, req, {
+        operation: 'deleteCase',
+        context: 'Delete Case API',
+        errorType: 'CaseDeletionError',
+        backlog_id: req.body?.backlog_id
+      });
+      console.error('[Admin] Delete case error:', error);
+      return res.status(500).json({
+        error: 'Internal Server Error',
+        message: 'An error occurred while deleting the case',
+        code: 'INTERNAL_ERROR'
+      });
     }
   }
 }
