@@ -76,12 +76,12 @@ class AdminController {
           error: casesError.message || 'Unknown error'
         });
         console.error('[Admin] Error fetching cases:', casesError);
-        return res.status(500).json({
+        return res.status(500).json([{
           status: 'error',
           message: 'Failed to fetch cases data',
-          error: casesError.message || 'Unknown error',
-          statusCode: 500
-        });
+          error_code: 'CASES_FETCH_ERROR',
+          error: casesError.message || 'Unknown error'
+        }]);
       }
 
       // Map ticket_stage to status and count
@@ -166,12 +166,11 @@ class AdminController {
         errorType: 'DashboardFetchError'
       });
       console.error('[Admin] Get admin dashboard error:', error);
-      return res.status(500).json({
+      return res.status(500).json([{
         status: 'error',
         message: 'Internal server error: ' + error.message,
-        statusCode: 500,
         error_code: 'INTERNAL_SERVER_ERROR'
-      });
+      }]);
     }
   }
 
@@ -1766,10 +1765,11 @@ class AdminController {
         logger.logFailedOperation(req, 400, 'MISSING_EMPLOYEE_ID', 'employee_id parameter is required', {
           operation: 'getGapAnalysis'
         });
-        return res.status(400).json({
-          error: 'Invalid employee_id parameter',
-          message: 'employee_id is required'
-        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'employee_id is required',
+          error_code: 'MISSING_EMPLOYEE_ID'
+        }]);
       }
 
       const employeeIdNum = parseInt(employee_id);
@@ -1778,10 +1778,11 @@ class AdminController {
           operation: 'getGapAnalysis',
           providedEmployeeId: employee_id
         });
-        return res.status(400).json({
-          error: 'Invalid employee_id parameter',
-          message: 'employee_id must be a valid number'
-        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'employee_id must be a valid number',
+          error_code: 'INVALID_EMPLOYEE_ID'
+        }]);
       }
 
       // Fetch backlog data - filter out deleted entries
@@ -1812,10 +1813,11 @@ class AdminController {
           error: backlogError.message
         });
         console.error('[Admin] Error fetching backlog data:', backlogError);
-        return res.status(500).json({
-          error: 'Internal Server Error',
-          message: 'An error occurred while fetching backlog data'
-        });
+        return res.status(500).json([{
+          status: 'error',
+          message: 'An error occurred while fetching backlog data',
+          error_code: 'BACKLOG_FETCH_ERROR'
+        }]);
       }
 
       if (!backlogList || backlogList.length === 0) {
@@ -2093,10 +2095,11 @@ class AdminController {
         errorType: 'GapAnalysisFetchError'
       });
       console.error('[Admin] Gap Analysis error:', error);
-      return res.status(500).json({
-        error: 'Internal Server Error',
-        message: 'An error occurred while fetching backlog data'
-      });
+      return res.status(500).json([{
+        status: 'error',
+        message: 'An error occurred while fetching backlog data',
+        error_code: 'GAP_ANALYSIS_ERROR'
+      }]);
     }
   }
 
@@ -2114,10 +2117,11 @@ class AdminController {
         logger.logFailedOperation(req, 400, 'MISSING_BACKLOG_ID', 'backlog_id parameter is required', {
           operation: 'getBacklogDetail'
         });
-        return res.status(400).json({
-          error: 'Invalid backlog_id parameter',
-          message: 'backlog_id is required and must be a valid string'
-        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'backlog_id is required and must be a valid string',
+          error_code: 'MISSING_BACKLOG_ID'
+        }]);
       }
 
       // Fetch backlog with all nested relationships using BacklogModel
@@ -2134,10 +2138,11 @@ class AdminController {
           error: backlogError.message
         });
         console.error('[Admin] Error fetching backlog:', backlogError);
-        return res.status(500).json({
-          error: 'Internal Server Error',
-          message: 'An error occurred while fetching backlog details'
-        });
+        return res.status(500).json([{
+          status: 'error',
+          message: 'An error occurred while fetching backlog details',
+          error_code: 'BACKLOG_DETAIL_FETCH_ERROR'
+        }]);
       }
 
       // Return empty array if not found (as per documentation)
@@ -2363,10 +2368,11 @@ class AdminController {
         backlog_id: req.query?.backlog_id
       });
       console.error('[Admin] Get backlog detail error:', error);
-      return res.status(500).json({
-        error: 'Internal Server Error',
-        message: 'An error occurred while fetching backlog details'
-      });
+      return res.status(500).json([{
+        status: 'error',
+        message: 'An error occurred while fetching backlog details',
+        error_code: 'BACKLOG_DETAIL_ERROR'
+      }]);
     }
   }
 
@@ -2414,10 +2420,11 @@ class AdminController {
             errorMessage: allError.message,
             errorCode: allError.code
           });
-          return res.status(500).json({
-            error: 'Internal Server Error',
-            message: 'Failed to fetch technical consultants'
-          });
+          return res.status(500).json([{
+            status: 'error',
+            message: 'Failed to fetch technical consultants',
+            error_code: 'CONSULTANT_FETCH_ERROR'
+          }]);
         }
 
         // Return all active employees if specific filter doesn't work
@@ -2439,10 +2446,11 @@ class AdminController {
             errorMessage: allError.message,
             errorCode: allError.code
           });
-          return res.status(500).json({
-            error: 'Internal Server Error',
-            message: 'Failed to fetch technical consultants'
-          });
+          return res.status(500).json([{
+            status: 'error',
+            message: 'Failed to fetch technical consultants',
+            error_code: 'CONSULTANT_FETCH_ERROR'
+          }]);
         }
 
         return res.status(200).json(allEmployees || []);
@@ -2458,10 +2466,11 @@ class AdminController {
         errorType: 'ConsultantFetchError'
       });
       console.error('[Admin] Get technical consultants error:', error);
-      return res.status(500).json({
-        error: 'Internal Server Error',
-        message: 'Failed to fetch technical consultants'
-      });
+      return res.status(500).json([{
+        status: 'error',
+        message: 'Failed to fetch technical consultants',
+        error_code: 'CONSULTANT_FETCH_ERROR'
+      }]);
     }
   }
 
@@ -2478,10 +2487,11 @@ class AdminController {
         logger.logFailedOperation(req, 400, 'MISSING_BACKLOG_ID', 'backlog_id is required', {
           operation: 'updateBacklog'
         });
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: 'backlog_id is required'
-        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'backlog_id is required',
+          error_code: 'MISSING_BACKLOG_ID'
+        }]);
       }
 
       // Check if backlog exists
@@ -2496,10 +2506,11 @@ class AdminController {
           operation: 'updateBacklog',
           backlog_id: backlog_id
         });
-        return res.status(404).json({
-          error: 'Not Found',
-          message: `Backlog with ID ${backlog_id} not found`
-        });
+        return res.status(404).json([{
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          error_code: 'BACKLOG_NOT_FOUND'
+        }]);
       }
 
       if (existingBacklog.deleted_flag === true) {
@@ -2507,10 +2518,11 @@ class AdminController {
           operation: 'updateBacklog',
           backlog_id: backlog_id
         });
-        return res.status(404).json({
-          error: 'Not Found',
-          message: `Backlog with ID ${backlog_id} not found`
-        });
+        return res.status(404).json([{
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          error_code: 'BACKLOG_NOT_FOUND'
+        }]);
       }
 
       // Prepare update data
@@ -2541,10 +2553,11 @@ class AdminController {
               operation: 'updateBacklog',
               case_type_id: caseTypeIdNum
             });
-            return res.status(400).json({
-              error: 'Bad Request',
-              message: `Invalid case_type_id: ${caseTypeIdNum} does not exist`
-            });
+            return res.status(400).json([{
+              status: 'error',
+              message: `Invalid case_type_id: ${caseTypeIdNum} does not exist`,
+              error_code: 'INVALID_CASE_TYPE_ID'
+            }]);
           }
 
           updateData.case_type_id = caseTypeIdNum;
@@ -2566,21 +2579,23 @@ class AdminController {
           error: updateError.message
         });
         console.error('[Admin] Error updating backlog:', updateError);
-        return res.status(500).json({
-          error: 'Internal Server Error',
-          message: 'Failed to update backlog'
-        });
+        return res.status(500).json([{
+          status: 'error',
+          message: 'Failed to update backlog',
+          error_code: 'BACKLOG_UPDATE_ERROR'
+        }]);
       }
 
       if (!updatedBacklog) {
-        return res.status(404).json({
-          error: 'Not Found',
-          message: `Backlog with ID ${backlog_id} not found`
-        });
+        return res.status(404).json([{
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          error_code: 'BACKLOG_NOT_FOUND'
+        }]);
       }
 
-      return res.status(200).json({
-        success: true,
+      return res.status(200).json([{
+        status: 'success',
         message: 'Backlog updated successfully',
         data: {
           backlog_id: updatedBacklog.backlog_id,
@@ -2589,7 +2604,7 @@ class AdminController {
           case_type_id: updatedBacklog.case_type_id,
           updated_time: updatedBacklog.updated_time
         }
-      });
+      }]);
 
     } catch (error) {
       logger.logError(error, req, {
@@ -2599,10 +2614,11 @@ class AdminController {
         backlog_id: req.body?.backlog_id
       });
       console.error('[Admin] Update backlog error:', error);
-      return res.status(500).json({
-        error: 'Internal Server Error',
-        message: 'Failed to update backlog'
-      });
+      return res.status(500).json([{
+        status: 'error',
+        message: 'Failed to update backlog',
+        error_code: 'BACKLOG_UPDATE_ERROR'
+      }]);
     }
   }
 
@@ -2619,10 +2635,11 @@ class AdminController {
         logger.logFailedOperation(req, 400, 'MISSING_BACKLOG_ID', 'backlog_id is required', {
           operation: 'updateConsultantPolicy'
         });
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: 'backlog_id is required'
-        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'backlog_id is required',
+          error_code: 'MISSING_BACKLOG_ID'
+        }]);
       }
 
       // Check if backlog exists
@@ -2637,10 +2654,11 @@ class AdminController {
           operation: 'updateConsultantPolicy',
           backlog_id: backlog_id
         });
-        return res.status(404).json({
-          error: 'Not Found',
-          message: `Backlog with ID ${backlog_id} not found`
-        });
+        return res.status(404).json([{
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          error_code: 'BACKLOG_NOT_FOUND'
+        }]);
       }
 
       // Prepare update data
@@ -2670,10 +2688,11 @@ class AdminController {
               operation: 'updateConsultantPolicy',
               assigned_to: assignedToNum
             });
-            return res.status(400).json({
-              error: 'Bad Request',
-              message: `Invalid assigned_to: Employee ID ${assignedToNum} does not exist`
-            });
+            return res.status(400).json([{
+              status: 'error',
+              message: `Invalid assigned_to: Employee ID ${assignedToNum} does not exist`,
+              error_code: 'INVALID_EMPLOYEE_ID'
+            }]);
           }
 
           updateData.assigned_to = assignedToNum;
@@ -2713,17 +2732,19 @@ class AdminController {
           error: updateError.message
         });
         console.error('[Admin] Error updating consultant policy:', updateError);
-        return res.status(500).json({
-          error: 'Internal Server Error',
-          message: 'Failed to update consultant policy'
-        });
+        return res.status(500).json([{
+          status: 'error',
+          message: 'Failed to update consultant policy',
+          error_code: 'CONSULTANT_UPDATE_ERROR'
+        }]);
       }
 
       if (!updatedBacklog) {
-        return res.status(404).json({
-          error: 'Not Found',
-          message: `Backlog with ID ${backlog_id} not found`
-        });
+        return res.status(404).json([{
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          error_code: 'BACKLOG_NOT_FOUND'
+        }]);
       }
 
       // Email notification logic
@@ -2796,8 +2817,8 @@ class AdminController {
         console.error('[Admin] Error sending email notification:', emailError);
       }
 
-      return res.status(200).json({
-        success: true,
+      return res.status(200).json([{
+        status: 'success',
         message: 'Consultant assigned successfully',
         data: {
           backlog_id: updatedBacklog.backlog_id,
@@ -2805,7 +2826,7 @@ class AdminController {
           assigned_consultant_name: updatedBacklog.assigned_consultant_name,
           updated_time: updatedBacklog.updated_time
         }
-      });
+      }]);
 
     } catch (error) {
       logger.logError(error, req, {
@@ -2815,10 +2836,11 @@ class AdminController {
         backlog_id: req.body?.backlog_id
       });
       console.error('[Admin] Update consultant policy error:', error);
-      return res.status(500).json({
-        error: 'Internal Server Error',
-        message: 'Failed to update consultant policy'
-      });
+      return res.status(500).json([{
+        status: 'error',
+        message: 'Failed to update consultant policy',
+        error_code: 'CONSULTANT_UPDATE_ERROR'
+      }]);
     }
   }
 
@@ -2835,10 +2857,11 @@ class AdminController {
         logger.logFailedOperation(req, 400, 'MISSING_BACKLOG_ID', 'backlog_id is required', {
           operation: 'updateStatusTechnicalConsultant'
         });
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: 'backlog_id is required'
-        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'backlog_id is required',
+          error_code: 'MISSING_BACKLOG_ID'
+        }]);
       }
 
       // Check if backlog exists
@@ -2853,10 +2876,11 @@ class AdminController {
           operation: 'updateStatusTechnicalConsultant',
           backlog_id: backlog_id
         });
-        return res.status(404).json({
-          error: 'Not Found',
-          message: `Backlog with ID ${backlog_id} not found`
-        });
+        return res.status(404).json([{
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          error_code: 'BACKLOG_NOT_FOUND'
+        }]);
       }
 
       // Prepare update data
@@ -2899,17 +2923,19 @@ class AdminController {
           error: updateError.message
         });
         console.error('[Admin] Error updating backlog status:', updateError);
-        return res.status(500).json({
-          error: 'Internal Server Error',
-          message: 'Failed to update backlog'
-        });
+        return res.status(500).json([{
+          status: 'error',
+          message: 'Failed to update backlog',
+          error_code: 'BACKLOG_UPDATE_ERROR'
+        }]);
       }
 
       if (!updatedBacklog) {
-        return res.status(404).json({
-          error: 'Not Found',
-          message: `Backlog with ID ${backlog_id} not found`
-        });
+        return res.status(404).json([{
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          error_code: 'BACKLOG_NOT_FOUND'
+        }]);
       }
 
       // Email notification logic
@@ -2993,8 +3019,8 @@ class AdminController {
         ? 'Expert summary added successfully'
         : 'Status updated successfully';
 
-      return res.status(200).json({
-        success: true,
+      return res.status(200).json([{
+        status: 'success',
         message: responseMessage,
         data: {
           backlog_id: updatedBacklog.backlog_id,
@@ -3002,7 +3028,7 @@ class AdminController {
           expert_description: updatedBacklog.expert_description,
           updated_time: updatedBacklog.updated_time
         }
-      });
+      }]);
 
     } catch (error) {
       logger.logError(error, req, {
@@ -3012,10 +3038,168 @@ class AdminController {
         backlog_id: req.body?.backlog_id
       });
       console.error('[Admin] Update status technical consultant error:', error);
-      return res.status(500).json({
-        error: 'Internal Server Error',
-        message: 'Failed to update backlog'
+      return res.status(500).json([{
+        status: 'error',
+        message: 'Failed to update backlog',
+        error_code: 'INTERNAL_ERROR'
+      }]);
+    }
+  }
+
+  // POST /admin/addsummary
+  // Add expert summary/description to a backlog case
+  static async addSummary(req, res) {
+    try {
+      const { backlog_id, expert_description, updated_by, user_id } = req.body;
+
+      console.log('[Admin] Adding summary to backlog:', { backlog_id, expert_description });
+
+      // Validate required fields
+      if (!backlog_id) {
+        logger.logFailedOperation(req, 400, 'MISSING_BACKLOG_ID', 'backlog_id is required', {
+          operation: 'addSummary'
+        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'backlog_id is required',
+          error_code: 'MISSING_BACKLOG_ID'
+        }]);
+      }
+
+      if (!expert_description || expert_description.trim() === '') {
+        logger.logFailedOperation(req, 400, 'MISSING_EXPERT_DESCRIPTION', 'expert_description is required', {
+          operation: 'addSummary'
+        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'expert_description is required and cannot be empty',
+          error_code: 'MISSING_EXPERT_DESCRIPTION'
+        }]);
+      }
+
+      // Handle updated_by - can be string or number, convert to string
+      let updatedByValue = updated_by;
+      if (updated_by !== undefined && updated_by !== null) {
+        updatedByValue = String(updated_by).trim();
+      }
+      
+      if (!updatedByValue || updatedByValue === '') {
+        logger.logFailedOperation(req, 400, 'MISSING_UPDATED_BY', 'updated_by is required', {
+          operation: 'addSummary'
+        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'updated_by is required',
+          error_code: 'MISSING_UPDATED_BY'
+        }]);
+      }
+
+      if (!user_id || isNaN(parseInt(user_id))) {
+        logger.logFailedOperation(req, 400, 'MISSING_USER_ID', 'user_id is required and must be a valid number', {
+          operation: 'addSummary'
+        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'user_id is required and must be a valid number',
+          error_code: 'MISSING_USER_ID'
+        }]);
+      }
+
+      // Check if backlog exists and is not deleted
+      const { data: existingBacklog, error: fetchError } = await supabase
+        .from('backlog')
+        .select('backlog_id, deleted_flag')
+        .eq('backlog_id', backlog_id)
+        .single();
+
+      if (fetchError || !existingBacklog) {
+        logger.logFailedOperation(req, 404, 'BACKLOG_NOT_FOUND', 'Backlog not found', {
+          operation: 'addSummary',
+          backlog_id: backlog_id
+        });
+        return res.status(404).json([{
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          error_code: 'BACKLOG_NOT_FOUND'
+        }]);
+      }
+
+      if (existingBacklog.deleted_flag === true) {
+        logger.logFailedOperation(req, 404, 'BACKLOG_DELETED', 'Backlog is deleted', {
+          operation: 'addSummary',
+          backlog_id: backlog_id
+        });
+        return res.status(404).json([{
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          error_code: 'BACKLOG_NOT_FOUND'
+        }]);
+      }
+
+      // Prepare update data
+      const updateData = {
+        expert_description: expert_description.trim(),
+        updated_by: updatedByValue,
+        updated_time: new Date().toISOString()
+      };
+
+      // Update backlog entry
+      const { data: updatedBacklog, error: updateError } = await BacklogModel.update(backlog_id, updateData);
+
+      if (updateError) {
+        logger.logDatabaseError(updateError, 'UPDATE', 'backlog', {
+          query: 'Adding expert summary',
+          backlog_id: backlog_id,
+          updateData: Object.keys(updateData)
+        });
+        logger.logFailedOperation(req, 500, 'SUMMARY_UPDATE_ERROR', 'Failed to add summary', {
+          operation: 'addSummary',
+          backlog_id: backlog_id,
+          error: updateError.message
+        });
+        console.error('[Admin] Error adding summary:', updateError);
+        return res.status(500).json([{
+          status: 'error',
+          message: 'Failed to add summary',
+          error_code: 'SUMMARY_UPDATE_ERROR',
+          error: updateError.message || 'Unknown error'
+        }]);
+      }
+
+      if (!updatedBacklog) {
+        return res.status(404).json([{
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          error_code: 'BACKLOG_NOT_FOUND'
+        }]);
+      }
+
+      // Return success response
+      return res.status(200).json([{
+        status: 'success',
+        message: 'Summary added successfully',
+        data: {
+          backlog_id: updatedBacklog.backlog_id,
+          expert_description: updatedBacklog.expert_description,
+          updated_by: updatedBacklog.updated_by,
+          user_id: parseInt(user_id),
+          updated_time: updatedBacklog.updated_time
+        }
+      }]);
+
+    } catch (error) {
+      logger.logError(error, req, {
+        operation: 'addSummary',
+        context: 'Add Summary API',
+        errorType: 'SummaryAddError',
+        backlog_id: req.body?.backlog_id
       });
+      console.error('[Admin] Add summary error:', error);
+      return res.status(500).json([{
+        status: 'error',
+        message: 'Failed to add summary: ' + error.message,
+        error_code: 'INTERNAL_ERROR'
+      }]);
     }
   }
 
@@ -3042,20 +3226,22 @@ class AdminController {
         logger.logFailedOperation(req, 400, 'MISSING_BACKLOG_ID', 'backlog_id is required', {
           operation: 'insertComment'
         });
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: 'backlog_id is required in request body'
-        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'backlog_id is required in request body',
+          error_code: 'MISSING_BACKLOG_ID'
+        }]);
       }
 
       if (!comment_text || comment_text.trim() === '') {
         logger.logFailedOperation(req, 400, 'MISSING_COMMENT_TEXT', 'comment_text is required', {
           operation: 'insertComment'
         });
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: 'comment_text is required and cannot be empty'
-        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'comment_text is required and cannot be empty',
+          error_code: 'MISSING_COMMENT_TEXT'
+        }]);
       }
 
       // Validate backlog exists
@@ -3070,17 +3256,19 @@ class AdminController {
           operation: 'insertComment',
           backlog_id: backlog_id
         });
-        return res.status(404).json({
-          error: 'Not Found',
-          message: `Backlog with ID ${backlog_id} not found`
-        });
+        return res.status(404).json([{
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          error_code: 'BACKLOG_NOT_FOUND'
+        }]);
       }
 
       if (existingBacklog.deleted_flag === true) {
-        return res.status(404).json({
-          error: 'Not Found',
-          message: `Backlog with ID ${backlog_id} not found`
-        });
+        return res.status(404).json([{
+          status: 'error',
+          message: `Backlog with ID ${backlog_id} not found`,
+          error_code: 'BACKLOG_NOT_FOUND'
+        }]);
       }
 
       // Validate created_by and updated_by if provided
@@ -3135,10 +3323,11 @@ class AdminController {
           error: insertError.message
         });
         console.error('[Admin] Error inserting comment:', insertError);
-        return res.status(500).json({
-          error: 'Internal Server Error',
-          message: 'Failed to add comment'
-        });
+        return res.status(500).json([{
+          status: 'error',
+          message: 'Failed to add comment',
+          error_code: 'COMMENT_INSERT_ERROR'
+        }]);
       }
 
       // Email notification logic
@@ -3267,8 +3456,8 @@ class AdminController {
         console.error('[Admin] Error sending email notification:', emailError);
       }
 
-      return res.status(200).json({
-        success: true,
+      return res.status(200).json([{
+        status: 'success',
         message: 'Comment added successfully',
         data: {
           backlog_commentid: insertedComment.backlog_commentid,
@@ -3282,7 +3471,7 @@ class AdminController {
           updatedby_name: insertedComment.updatedby_name,
           department: insertedComment.department
         }
-      });
+      }]);
 
     } catch (error) {
       logger.logError(error, req, {
@@ -3292,10 +3481,11 @@ class AdminController {
         backlog_id: req.body?.backlog_id
       });
       console.error('[Admin] Insert comment error:', error);
-      return res.status(500).json({
-        error: 'Internal Server Error',
-        message: 'Failed to add comment'
-      });
+      return res.status(500).json([{
+        status: 'error',
+        message: 'Failed to add comment',
+        error_code: 'INTERNAL_ERROR'
+      }]);
     }
   }
 
@@ -3312,11 +3502,11 @@ class AdminController {
         logger.logFailedOperation(req, 400, 'MISSING_DOCUMENT_ID', 'document_id is required', {
           operation: 'viewDocument'
         });
-        return res.status(400).json({
-          error: 'Bad Request',
+        return res.status(400).json([{
+          status: 'error',
           message: 'document_id is required',
-          code: 'MISSING_DOCUMENT_ID'
-        });
+          error_code: 'MISSING_DOCUMENT_ID'
+        }]);
       }
 
       const documentIdNum = parseInt(document_id);
@@ -3325,11 +3515,11 @@ class AdminController {
           operation: 'viewDocument',
           document_id: document_id
         });
-        return res.status(400).json({
-          error: 'Bad Request',
+        return res.status(400).json([{
+          status: 'error',
           message: 'Invalid document_id',
-          code: 'INVALID_DOCUMENT_ID'
-        });
+          error_code: 'INVALID_DOCUMENT_ID'
+        }]);
       }
 
       console.log(`[Admin] Fetching backlog document_id: ${documentIdNum}`);
@@ -3352,11 +3542,11 @@ class AdminController {
           document_id: documentIdNum,
           error: docError?.message
         });
-        return res.status(404).json({
-          error: 'Not Found',
+        return res.status(404).json([{
+          status: 'error',
           message: `Document with ID ${documentIdNum} not found`,
-          code: 'DOCUMENT_NOT_FOUND'
-        });
+          error_code: 'DOCUMENT_NOT_FOUND'
+        }]);
       }
 
       // Fetch document category if category_id exists
@@ -3392,11 +3582,11 @@ class AdminController {
           operation: 'viewDocument',
           document_id: documentIdNum
         });
-        return res.status(404).json({
-          error: 'Not Found',
+        return res.status(404).json([{
+          status: 'error',
           message: 'Document file path not found',
-          code: 'FILE_PATH_NOT_FOUND'
-        });
+          error_code: 'FILE_PATH_NOT_FOUND'
+        }]);
       }
 
       // Determine content type from file extension
@@ -3418,8 +3608,8 @@ class AdminController {
 
       // If it's already a full URL, return it directly
       if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
-        return res.status(200).json({
-          success: true,
+        return res.status(200).json([{
+          status: 'success',
           url: filePath,
           document_url: filePath,
           document_id: document.document_id,
@@ -3431,7 +3621,7 @@ class AdminController {
           uploaded_by: document.uploaded_by || null,
           category_id: document.category_id || null,
           category_name: categoryName || null
-        });
+        }]);
       }
 
       // Construct Supabase storage URL
@@ -3450,8 +3640,8 @@ class AdminController {
         // Construct public URL
         const publicUrl = `${supabaseUrl}/storage/v1/object/public/${bucketName}/${filePath}`;
 
-        return res.status(200).json({
-          success: true,
+        return res.status(200).json([{
+          status: 'success',
           url: publicUrl,
           document_url: publicUrl,
           document_id: document.document_id,
@@ -3464,11 +3654,11 @@ class AdminController {
           uploaded_by: document.uploaded_by || null,
           category_id: document.category_id || null,
           category_name: categoryName || null
-        });
+        }]);
       } else {
         // If no Supabase URL, return relative path
-        return res.status(200).json({
-          success: true,
+        return res.status(200).json([{
+          status: 'success',
           url: filePath,
           document_url: filePath,
           document_id: document.document_id,
@@ -3481,7 +3671,7 @@ class AdminController {
           uploaded_by: document.uploaded_by || null,
           category_id: document.category_id || null,
           category_name: categoryName || null
-        });
+        }]);
       }
 
     } catch (error) {
@@ -3492,11 +3682,11 @@ class AdminController {
         document_id: req.body?.document_id
       });
       console.error('[Admin] View document error:', error);
-      return res.status(500).json({
-        error: 'Internal Server Error',
+      return res.status(500).json([{
+        status: 'error',
         message: 'An error occurred while retrieving the document',
-        code: 'INTERNAL_ERROR'
-      });
+        error_code: 'INTERNAL_ERROR'
+      }]);
     }
   }
 
@@ -3513,11 +3703,11 @@ class AdminController {
         logger.logFailedOperation(req, 400, 'MISSING_BACKLOG_ID', 'backlog_id is required', {
           operation: 'deleteCase'
         });
-        return res.status(400).json({
-          error: 'Bad Request',
+        return res.status(400).json([{
+          status: 'error',
           message: 'backlog_id is required',
-          code: 'MISSING_BACKLOG_ID'
-        });
+          error_code: 'MISSING_BACKLOG_ID'
+        }]);
       }
 
       // Check if backlog exists and is not already deleted
@@ -3537,11 +3727,11 @@ class AdminController {
           backlog_id: backlog_id,
           error: fetchError?.message
         });
-        return res.status(404).json({
-          error: 'Not Found',
+        return res.status(404).json([{
+          status: 'error',
           message: `Case with ID '${backlog_id}' not found`,
-          code: 'CASE_NOT_FOUND'
-        });
+          error_code: 'CASE_NOT_FOUND'
+        }]);
       }
 
       if (existingBacklog.deleted_flag === true) {
@@ -3549,11 +3739,11 @@ class AdminController {
           operation: 'deleteCase',
           backlog_id: backlog_id
         });
-        return res.status(404).json({
-          error: 'Not Found',
+        return res.status(404).json([{
+          status: 'error',
           message: `Case with ID '${backlog_id}' not found`,
-          code: 'CASE_NOT_FOUND'
-        });
+          error_code: 'CASE_NOT_FOUND'
+        }]);
       }
 
       // Get current user ID from headers, session, or request body
@@ -3593,19 +3783,19 @@ class AdminController {
           error: updateError.message
         });
         console.error('[Admin] Error deleting case:', updateError);
-        return res.status(500).json({
-          error: 'Internal Server Error',
+        return res.status(500).json([{
+          status: 'error',
           message: 'An error occurred while deleting the case',
-          code: 'INTERNAL_ERROR'
-        });
+          error_code: 'INTERNAL_ERROR'
+        }]);
       }
 
       if (!updatedBacklog) {
-        return res.status(404).json({
-          error: 'Not Found',
+        return res.status(404).json([{
+          status: 'error',
           message: `Case with ID '${backlog_id}' not found`,
-          code: 'CASE_NOT_FOUND'
-        });
+          error_code: 'CASE_NOT_FOUND'
+        }]);
       }
 
       // Optionally soft delete related records (comments and documents)
@@ -3633,8 +3823,8 @@ class AdminController {
         // Continue even if documents deletion fails
       }
 
-      return res.status(200).json({
-        success: true,
+      return res.status(200).json([{
+        status: 'success',
         message: `Case ${backlog_id} has been deleted successfully`,
         data: {
           backlog_id: backlog_id,
@@ -3643,7 +3833,7 @@ class AdminController {
           deleted_time: updatedBacklog.updated_time || now,
           deleted_by: deletedBy || updatedBacklog.updated_by || null
         }
-      });
+      }]);
 
     } catch (error) {
       logger.logError(error, req, {
@@ -3653,11 +3843,11 @@ class AdminController {
         backlog_id: req.body?.backlog_id
       });
       console.error('[Admin] Delete case error:', error);
-      return res.status(500).json({
-        error: 'Internal Server Error',
+      return res.status(500).json([{
+        status: 'error',
         message: 'An error occurred while deleting the case',
-        code: 'INTERNAL_ERROR'
-      });
+        error_code: 'INTERNAL_ERROR'
+      }]);
     }
   }
 

@@ -123,6 +123,14 @@ router.patch(
   AdminController.updateStatusTechnicalConsultant
 );
 
+// POST /admin/addsummary
+// Add expert summary/description to a backlog case
+router.post(
+  '/addsummary',
+  // AuthMiddleware.authenticate,
+  AdminController.addSummary
+);
+
 // POST /admin/comments_insert
 // Add a comment to a backlog/case
 router.post(
@@ -158,25 +166,6 @@ router.get(
   '/gettasks',
   // AuthMiddleware.authenticate,
   AdminController.getTasks
-);
-
-
-// GET /admin/getleaves?page={page}&size={size}
-// Get all leave applications with employee and leave type information
-// Requires authentication via Bearer token
-router.get(
-  '/getleaves',
-  // AuthMiddleware.authenticate,
-  AdminController.getLeaveApplications
-);
-
-// PATCH /admin/updateleavestatus
-// Update leave application status (approve or reject)
-// Requires authentication via Bearer token
-router.patch(
-  '/updateleavestatus',
-  // AuthMiddleware.authenticate,
-  AdminController.updateLeaveStatus
 );
 
 export default router;
