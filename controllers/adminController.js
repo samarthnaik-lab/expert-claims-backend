@@ -1681,7 +1681,49 @@ class AdminController {
         .from('leave_applications')
         .update(updateData)
         .eq('application_id', applicationIdNum)
-        .select()\r\n        .single();\r\n\r\n      if (updateError) {\r\n        console.error('[Admin] Error updating leave application:', updateError);\r\n        return res.status(500).json([{\r\n          status: 'error',\r\n          message: 'Failed to update leave application',\r\n          error_code: 'UPDATE_ERROR',\r\n          error: updateError.message || 'Unknown error'\r\n        }]);\r\n      }\r\n\r\n      // Build success response\r\n      const response = {\r\n        status: 'success',\r\n        message: Leave application ${normalizedStatus} successfully,\r\n        data: {\r\n          application_id: updatedLeave.application_id,\r\n          status: updatedLeave.status,\r\n          approved_by: updatedLeave.approved_by,\r\n          approved_date: updatedLeave.approved_date,\r\n          rejection_reason: updatedLeave.rejection_reason,\r\n          updated_time: updatedLeave.updated_time\r\n        }\r\n      };\r\n\r\n      // Return as array with single object (as expected by frontend)\r\n      return res.status(200).json([response]);\r\n\r\n    } catch (error) {\r\n      console.error('[Admin] Update leave status error:', error);\r\n      return res.status(500).json([{\r\n        status: 'error',\r\n        message: 'Internal server error: ' + error.message,\r\n        error_code: 'INTERNAL_ERROR'\r\n      }]);\r\n    }\r\n  }\r\n\r\n  // GET /admin/gapanalysis?employee_id={employee_id}
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('[Admin] Error updating leave application:', updateError);
+        return res.status(500).json([{
+          status: 'error',
+          message: 'Failed to update leave application',
+          error_code: 'UPDATE_ERROR',
+          error: updateError.message || 'Unknown error'
+        }]);
+      }
+
+      // Build success response
+      const response = {
+        status: 'success',
+        message: `Leave application ${normalizedStatus} successfully`,
+        data: {
+          application_id: updatedLeave.application_id,
+          status: updatedLeave.status,
+          approved_by: updatedLeave.approved_by,
+          approved_date: updatedLeave.approved_date,
+          rejection_reason: updatedLeave.rejection_reason,
+          updated_time: updatedLeave.updated_time
+        }
+      };
+
+      // Return as array with single object (as expected by frontend)
+      return res.status(200).json([response]);
+
+    } catch (error) {
+      console.error('[Admin] Update leave status error:', error);
+      return res.status(500).json([{
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        error_code: 'INTERNAL_ERROR'
+      }]);
+    }
+  }
+
+// GET /admin/gapanalysis?employee_id={employee_id}
+
+  // GET /admin/gapanalysis?employee_id={employee_id}
   // Get all backlog/case data for gap analysis in Admin Dashboard
   // When employee_id=0, returns all cases in the system
   static async getGapAnalysis(req, res) {
@@ -3238,40 +3280,7 @@ class AdminController {
         .single();
 
       if (updateError) {
-        console.error('[Admin] Error updating leave application:', updateError);
-        return res.status(500).json([{
-          status: 'error',
-          message: 'Failed to update leave application',
-          error_code: 'UPDATE_ERROR',
-          error: updateError.message || 'Unknown error'
-        }]);
-      }
-
-      // Build success response
-      const response = {
-        status: 'success',
-        message: `Leave application ${normalizedStatus} successfully`,
-        data: {
-          application_id: updatedLeave.application_id,
-          status: updatedLeave.status,
-          approved_by: updatedLeave.approved_by,
-          approved_date: updatedLeave.approved_date,
-          rejection_reason: updatedLeave.rejection_reason,
-          updated_time: updatedLeave.updated_time
-        }
-      };
-
-      // Return as array with single object (as expected by frontend)
-      return res.status(200).json([response]);
-
-    } catch (error) {
-      console.error('[Admin] Update leave status error:', error);
-      return res.status(500).json([{
-        status: 'error',
-        message: 'Internal server error: ' + error.message,
-        error_code: 'INTERNAL_ERROR'
-      }]);
-        .select()\r\n        .single();\r\n\r\n      if (updateError) {\r\n        console.error('[Admin] Error updating leave application:', updateError);\r\n        return res.status(500).json([{\r\n          status: 'error',\r\n          message: 'Failed to update leave application',\r\n          error_code: 'UPDATE_ERROR',\r\n          error: updateError.message || 'Unknown error'\r\n        }]);\r\n      }\r\n\r\n      // Build success response\r\n      const response = {\r\n        status: 'success',\r\n        message: Leave application ${normalizedStatus} successfully,\r\n        data: {\r\n          application_id: updatedLeave.application_id,\r\n          status: updatedLeave.status,\r\n          approved_by: updatedLeave.approved_by,\r\n          approved_date: updatedLeave.approved_date,\r\n          rejection_reason: updatedLeave.rejection_reason,\r\n          updated_time: updatedLeave.updated_time\r\n        }\r\n      };\r\n\r\n      // Return as array with single object (as expected by frontend)\r\n      return res.status(200).json([response]);\r\n\r\n    } catch (error) {\r\n      console.error('[Admin] Update leave status error:', error);\r\n      return res.status(500).json([{\r\n        status: 'error',\r\n        message: 'Internal server error: ' + error.message,\r\n        error_code: 'INTERNAL_ERROR'\r\n      }]);\r\n    }\r\n  }\r\n\r\n        logger.logDatabaseError(updateError, 'UPDATE', 'backlog', {
+        logger.logDatabaseError(updateError, 'UPDATE', 'backlog', {
           query: 'Soft deleting backlog',
           backlog_id: backlog_id,
           updateData: Object.keys(updateData)
