@@ -7,6 +7,7 @@ import publicRoutes from './routes/publicRoutes.js';
 import supportRoutes from './routes/supportRoutes.js';
 import customerRoutes from './routes/customerRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
+import documentRoutes from './routes/documentRoutes.js';
 import logger from './utils/logger.js';
 
 dotenv.config();
@@ -97,6 +98,7 @@ app.use('/customer', customerRoutes);
 
 // API routes (authentication required)
 app.use('/api', authRoutes);
+app.use('/api', documentRoutes);  // Document routes before partnerRoutes to avoid auth middleware conflict
 app.use('/api', partnerRoutes);
 
 // Admin routes (authentication required)
