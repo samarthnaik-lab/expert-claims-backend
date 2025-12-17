@@ -55,6 +55,24 @@ router.delete(
   AdminController.deleteUser
 );
 
+// GET /admin/getleaves?page={page}&size={size}
+// Get all leave applications with employee and leave type information
+// Requires authentication via Bearer token
+router.get(
+  '/getleaves',
+  // AuthMiddleware.authenticate,
+  AdminController.getLeaveApplications
+);
+
+// PATCH /admin/updateleavestatus
+// Update leave application status (approve or reject)
+// Requires authentication via Bearer token
+router.patch(
+  '/updateleavestatus',
+  // AuthMiddleware.authenticate,
+  AdminController.updateLeaveStatus
+);
+
 // GET /admin/gapanalysis?employee_id={employee_id}
 // Get all backlog/case data for gap analysis in Admin Dashboard
 // When employee_id=0, returns all cases in the system

@@ -1461,6 +1461,297 @@ class AdminController {
     }
   }
 
+  // GET /admin/getleaves?page={page}&size={size}
+  // Get all leave applications with employee and leave type information
+  static async getLeaveApplications(req, res) {
+    try {
+      const { page, size } = req.query;
+      
+      // Default pagination values if not provided
+      const pageNum = page ? parseInt(page) : 1;
+      const sizeNum = size ? parseInt(size) : 10;
+
+      // Validate pagination parameters if provided
+      if (page && (isNaN(pageNum) || pageNum < 1)) {
+        return res.status(400).json([{
+          status: 'error',
+          message: 'page must be a valid positive number',
+          error_code: 'INVALID_PARAMETERS'
+        }]);
+      }
+
+      if (size && (isNaN(sizeNum) || sizeNum < 1)) {
+        return res.status(400).json([{
+          status: 'error',
+          message: 'size must be a valid positive number',
+          error_code: 'INVALID_PARAMETERS'
+        }]);
+      }
+
+      console.log(`[Admin] Fetching leave applications - page: ${pageNum}, size: ${sizeNum}`);
+
+      // Calculate pagination
+      const offset = (pageNum - 1) * sizeNum;
+
+      // Fetch leave applications with pagination
+      const { data: leaveApplications, error: leaveError, count } = await supabase
+        .from('leave_applications')
+        .select('*', { count: 'exact' })
+        .order('application_id', { ascending: false })
+        .range(offset, offset + sizeNum - 1);
+
+      if (leaveError) {
+        console.error('[Admin] Error fetching leave applications:', leaveError);
+        return res.status(500).json([{
+          status: 'error',
+          message: 'Failed to fetch leave applications',
+          error_code: 'LEAVE_FETCH_ERROR',
+          error: leaveError.message || 'Unknown error'
+        }]);
+      }
+
+      // Get unique employee_ids and leave_type_ids for batch fetching
+      const employeeIds = [...new Set((leaveApplications || []).map(la => la.employee_id).filter(Boolean))];
+      const leaveTypeIds = [...new Set((leaveApplications || []).map(la => la.leave_type_id).filter(Boolean))];
+
+      // Fetch employees data
+      let employeesMap = {};
+      if (employeeIds.length > 0) {
+        const { data: employees, error: employeesError } = await supabase
+          .from('employees')
+          .select('employee_id, first_name, last_name')
+          .in('employee_id', employeeIds);
+
+        if (!employeesError && employees) {
+          employeesMap = employees.reduce((acc, emp) => {
+            acc[emp.employee_id] = emp;
+            return acc;
+          }, {});
+        }
+      }
+
+      // Fetch leave types data
+      let leaveTypesMap = {};
+      if (leaveTypeIds.length > 0) {
+        const { data: leaveTypes, error: leaveTypesError } = await supabase
+          .from('leave_types')
+          .select('leave_type_id, type_name')
+          .in('leave_type_id', leaveTypeIds);
+
+        if (!leaveTypesError && leaveTypes) {
+          leaveTypesMap = leaveTypes.reduce((acc, lt) => {
+            acc[lt.leave_type_id] = lt;
+            return acc;
+          }, {});
+        }
+      }
+
+      // Format the response to match frontend expectations
+      const formattedLeaves = (leaveApplications || []).map(leave => {
+        const employee = leave.employee_id ? employeesMap[leave.employee_id] : null;
+        const leaveType = leave.leave_type_id ? leaveTypesMap[leave.leave_type_id] : null;
+
+        return {
+          application_id: leave.application_id,
+          employee_id: leave.employee_id,
+          leave_type_id: leave.leave_type_id,
+          start_date: leave.start_date,
+          end_date: leave.end_date,
+          total_days: leave.total_days,
+          reason: leave.reason,
+          status: leave.status || 'pending',
+          applied_date: leave.applied_date,
+          employees: {
+            employee_id: employee?.employee_id || null,
+            first_name: employee?.first_name || '',
+            last_name: employee?.last_name || ''
+          },
+          leave_types: {
+            leave_type_id: leaveType?.leave_type_id || null,
+            type_name: leaveType?.type_name || 'N/A'
+          }
+        };
+      });
+
+      // Build response matching the expected format
+      const response = {
+        status: 'success',
+        message: 'Leave applications retrieved successfully',
+        data: formattedLeaves,
+        pagination: {
+          page: pageNum,
+          size: sizeNum,
+          total: count || 0,
+          totalPages: count ? Math.ceil(count / sizeNum) : 0
+        }
+      };
+
+      // Return as array with single object (as expected by frontend)
+      return res.status(200).json([response]);
+
+    } catch (error) {
+      console.error('[Admin] Get leave applications error:', error);
+      return res.status(500).json([{
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        error_code: 'INTERNAL_ERROR'
+      }]);
+    }
+  }
+
+  // PATCH /admin/updateleavestatus
+  // Update leave application status (approve or reject)
+  static async updateLeaveStatus(req, res) {
+    try {
+      const { application_id, status, approved_by, approved_date, rejection_reason } = req.body;
+      const sessionId = req.headers['session_id'] || req.headers['session-id'];
+      const jwtToken = req.headers['jwt_token'] || req.headers['jwt-token'];
+
+      console.log('[Admin] Updating leave application status:', { application_id, status, approved_by });
+
+      // Validate required fields
+      if (!application_id) {
+        return res.status(400).json([{
+          status: 'error',
+          message: 'application_id is required',
+          error_code: 'MISSING_APPLICATION_ID'
+        }]);
+      }
+
+      if (!status) {
+        return res.status(400).json([{
+          status: 'error',
+          message: 'status is required',
+          error_code: 'MISSING_STATUS'
+        }]);
+      }
+
+      // Validate status value
+      const validStatuses = ['approved', 'rejected', 'pending'];
+      const normalizedStatus = status.toLowerCase();
+      if (!validStatuses.includes(normalizedStatus)) {
+        return res.status(400).json([{
+          status: 'error',
+          message: 'status must be one of: approved, rejected, pending',
+          error_code: 'INVALID_STATUS'
+        }]);
+      }
+
+      // Validate application_id is a number
+      const applicationIdNum = parseInt(application_id);
+      if (isNaN(applicationIdNum) || applicationIdNum < 1) {
+        return res.status(400).json([{
+          status: 'error',
+          message: 'application_id must be a valid positive number',
+          error_code: 'INVALID_APPLICATION_ID'
+        }]);
+      }
+
+      // Check if leave application exists
+      const { data: existingLeave, error: fetchError } = await supabase
+        .from('leave_applications')
+        .select('application_id, status')
+        .eq('application_id', applicationIdNum)
+        .single();
+
+      if (fetchError || !existingLeave) {
+        console.error('[Admin] Error fetching leave application:', fetchError);
+        return res.status(404).json([{
+          status: 'error',
+          message: 'Leave application not found',
+          error_code: 'LEAVE_NOT_FOUND'
+        }]);
+      }
+
+      // Prepare update data
+      const now = new Date().toISOString();
+      const updateData = {
+        status: normalizedStatus,
+        updated_time: now
+      };
+
+      // If approving or rejecting, set approved_by and approved_date
+      if (normalizedStatus === 'approved' || normalizedStatus === 'rejected') {
+        if (approved_by) {
+          const approvedByNum = parseInt(approved_by);
+          if (isNaN(approvedByNum) || approvedByNum < 1) {
+            return res.status(400).json([{
+              status: 'error',
+              message: 'approved_by must be a valid positive number',
+              error_code: 'INVALID_APPROVED_BY'
+            }]);
+          }
+          updateData.approved_by = approvedByNum;
+        }
+
+        if (approved_date) {
+          updateData.approved_date = approved_date;
+        } else {
+          // Use current date if not provided
+          updateData.approved_date = new Date().toISOString().slice(0, 10);
+        }
+
+        // If rejecting, set rejection_reason if provided
+        if (normalizedStatus === 'rejected' && rejection_reason) {
+          updateData.rejection_reason = rejection_reason;
+        } else if (normalizedStatus === 'rejected') {
+          // Clear rejection_reason if not provided (optional)
+          updateData.rejection_reason = null;
+        }
+      } else if (normalizedStatus === 'pending') {
+        // If setting back to pending, clear approval fields
+        updateData.approved_by = null;
+        updateData.approved_date = null;
+        updateData.rejection_reason = null;
+      }
+
+      // Update the leave application
+      const { data: updatedLeave, error: updateError } = await supabase
+        .from('leave_applications')
+        .update(updateData)
+        .eq('application_id', applicationIdNum)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('[Admin] Error updating leave application:', updateError);
+        return res.status(500).json([{
+          status: 'error',
+          message: 'Failed to update leave application',
+          error_code: 'UPDATE_ERROR',
+          error: updateError.message || 'Unknown error'
+        }]);
+      }
+
+      // Build success response
+      const response = {
+        status: 'success',
+        message: `Leave application ${normalizedStatus} successfully`,
+        data: {
+          application_id: updatedLeave.application_id,
+          status: updatedLeave.status,
+          approved_by: updatedLeave.approved_by,
+          approved_date: updatedLeave.approved_date,
+          rejection_reason: updatedLeave.rejection_reason,
+          updated_time: updatedLeave.updated_time
+        }
+      };
+
+      // Return as array with single object (as expected by frontend)
+      return res.status(200).json([response]);
+
+    } catch (error) {
+      console.error('[Admin] Update leave status error:', error);
+      return res.status(500).json([{
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        error_code: 'INTERNAL_ERROR'
+      }]);
+    }
+  }
+
+// GET /admin/gapanalysis?employee_id={employee_id}
+
   // GET /admin/gapanalysis?employee_id={employee_id}
   // Get all backlog/case data for gap analysis in Admin Dashboard
   // When employee_id=0, returns all cases in the system
