@@ -61,6 +61,11 @@ SUPABASE_SERVICE_ROLE_KEY=your_service_role_key_here
 # JWT Configuration
 JWT_SECRET=your_secret_key_here_minimum_32_characters
 
+# MSG91 SMS Service Configuration (for OTP - Widget API)
+MSG91_WIDGET_ID=your_msg91_widget_id
+MSG91_API_KEY=your_msg91_api_key
+# Note: Widget API generates and sends OTP automatically. We store metadata (requestId) in database.
+
 # Server Configuration (Optional)
 PORT=3000
 ```

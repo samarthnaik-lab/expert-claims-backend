@@ -1,16 +1,69 @@
 import supabase from '../config/database.js';
 
 class UserModel {
-  // Get user by email and role
+  // Get user by email and role (excludes deleted users)
   static async findByEmailAndRole(email, role) {
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('email', email)
-      .eq('role', role.toLowerCase())
-      .single();
+    try {
+      const normalizedEmail = email?.trim().toLowerCase();
+      const normalizedRole = role?.toLowerCase();
+      
+      console.log('[UserModel] Searching for user:', { 
+        email: normalizedEmail, 
+        role: normalizedRole,
+        originalEmail: email,
+        originalRole: role
+      });
 
-    return { data, error };
+      // First, let's check if user exists at all (without deleted_flag filter)
+      const { data: allUsers, error: checkError } = await supabase
+        .from('users')
+        .select('user_id, email, role, deleted_flag')
+        .eq('email', normalizedEmail)
+        .eq('role', normalizedRole);
+
+      if (checkError) {
+        console.error('[UserModel] Error checking users:', checkError);
+        return { data: null, error: checkError };
+      }
+
+      console.log('[UserModel] Found users (including deleted):', allUsers?.length || 0);
+      if (allUsers && allUsers.length > 0) {
+        allUsers.forEach(user => {
+          console.log('[UserModel] User found:', {
+            user_id: user.user_id,
+            email: user.email,
+            role: user.role,
+            deleted_flag: user.deleted_flag
+          });
+        });
+      }
+
+      // Now query with deleted_flag filter
+      const { data, error } = await supabase
+        .from('users')
+        .select('*')
+        .eq('email', normalizedEmail)
+        .eq('role', normalizedRole)
+        .eq('deleted_flag', false) // Exclude deleted users
+        .maybeSingle(); // Use maybeSingle() instead of single() to avoid error on 0 rows
+
+      // maybeSingle() returns null data instead of error when no rows found
+      if (error && error.code !== 'PGRST116') {
+        console.error('[UserModel] Query error:', error);
+        return { data: null, error };
+      }
+
+      if (!data) {
+        console.log('[UserModel] No active user found. User may be deleted or not exist.');
+      } else {
+        console.log('[UserModel] Active user found:', { user_id: data.user_id, email: data.email });
+      }
+
+      return { data: data || null, error: null };
+    } catch (err) {
+      console.error('[UserModel] Exception:', err);
+      return { data: null, error: err };
+    }
   }
 
   // Get user by mobile and role

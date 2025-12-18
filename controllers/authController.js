@@ -1,3 +1,4 @@
+import jwt from 'jsonwebtoken';
 import AuthService from '../services/authService.js';
 import SessionModel from '../models/SessionModel.js';
 
@@ -68,10 +69,13 @@ class AuthController {
       const { valid, user, error } = await AuthService.validateCredentials(email, password, role, true);
 
       if (!valid) {
-        console.error('Invalid credentials:', error);
+        console.error('Invalid credentials:', { email, role, error });
+        // Return specific error message without revealing too much
+        const errorMessage = error || 'Invalid credentials';
         return res.status(401).json({
           status: 'error',
-          message: error || 'Invalid credentials',
+          success: false,
+          message: errorMessage,
           statusCode: 401
         });
       }
@@ -97,6 +101,12 @@ class AuthController {
       }
 
       console.log('Login successful, returning response');
+      
+      // Calculate session expiry details for frontend display
+      const expiresAtISO = expiresAt.toISOString();
+      const expiresAtTimestamp = expiresAt.getTime();
+      const expiresInSeconds = Math.floor((expiresAtTimestamp - Date.now()) / 1000);
+
       const response = {
         status: 'success', // For frontend to recognize success
         success: true, // For frontend to recognize success
@@ -108,14 +118,17 @@ class AuthController {
         sessionId: sessionResult.sessionId, // For frontend localStorage compatibility
         userId: userId.toString(), // For frontend localStorage
         userRole: role, // For frontend localStorage
-        expiry: expiresAt.toISOString(),
-        expiresAt: expiresAt.getTime() // Unix timestamp for frontend localStorage
+        expiry: expiresAtISO, // ISO string format
+        expiresAt: expiresAtTimestamp, // Unix timestamp for frontend localStorage
+        expiresIn: expiresInSeconds, // Seconds until expiry (for countdown)
+        expiresAtFormatted: expiresAt.toLocaleString() // Human-readable format for display
       };
       
       console.log('Response data:', { 
         hasToken: !!response.jwtToken, 
         sessionId: response.sessionId, 
-        userId: response.userId 
+        userId: response.userId,
+        expiresAt: response.expiresAtFormatted
       });
       
       return res.status(200).json(response);
@@ -133,20 +146,44 @@ class AuthController {
  
   static async handleTwoStepLogin(email, password, role, otp, mobile, step, req, res) {
     
+    // Step 1: Credential Validation (no OTP provided, no step specified)
+    // After validation, automatically send OTP
     if (step === 'credential_validation' || (!step && !otp)) {
       const { valid, user, error } = await AuthService.validateCredentials(email, password, role);
 
       if (!valid) {
+        console.error('Invalid credentials in two-step login (credential_validation):', { email, role, step, error });
         return res.status(401).json({
           success: false,
           message: error || 'Invalid credentials',
-          statusCode: 401
+          statusCode: 401,
+          nextStep: null // No next step if credentials invalid
         });
       }
 
+      // Credentials are valid - automatically send OTP
+      console.log('[AuthController] Credentials validated, automatically sending OTP...');
+      const otpResult = await AuthService.generateAndSaveOTP(email, role, mobile || user.mobile_number);
+
+      if (!otpResult.success) {
+        return res.status(500).json({
+          success: false,
+          message: otpResult.error || 'Failed to send OTP',
+          statusCode: 500
+        });
+      }
+
+      // Return response indicating OTP was sent
       return res.status(200).json({
         success: true,
-        message: 'valid details'
+        message: `OTP sent to mobile number ${otpResult.mobile}. Please check your SMS.`,
+        otp: null, // Widget API generates OTP - we don't have it
+        contactType: otpResult.contactType,
+        contactInfo: otpResult.mobile,
+        expiresAt: otpResult.expiresAt,
+        requestId: otpResult.requestId, // Include requestId for tracking
+        nextStep: 'final_login', // Indicate next step
+        requiresOtp: true // Frontend should show OTP field
       });
     }
 
@@ -163,6 +200,7 @@ class AuthController {
         });
       }
 
+      // Generate and save OTP (for admin, sends to email; for customer, sends to mobile)
       const otpResult = await AuthService.generateAndSaveOTP(email, role, mobile || user.mobile_number);
 
       if (!otpResult.success) {
@@ -173,9 +211,17 @@ class AuthController {
         });
       }
 
+      // Return response (OTP is sent via SMS, we don't have the value)
       return res.status(200).json({
         success: true,
-        message: 'OTP sent successfully'
+        message: `OTP sent to mobile number ${otpResult.mobile}. Please check your SMS.`,
+        otp: null, // Widget API generates OTP - we don't have it
+        contactType: otpResult.contactType,
+        contactInfo: otpResult.mobile,
+        expiresAt: otpResult.expiresAt,
+        requestId: otpResult.requestId, // Include requestId for tracking
+        nextStep: 'final_login', // Indicate next step
+        requiresOtp: true // Frontend should show OTP field
       });
     }
 
@@ -193,12 +239,16 @@ class AuthController {
       const { valid, user, error } = await AuthService.verifyOTP(email, role, otp);
 
       if (!valid) {
+        console.error(`[AuthController] OTP verification failed for ${email}:`, error);
         return res.status(401).json({
           success: false,
           message: error || 'Invalid OTP',
-          statusCode: 401
+          statusCode: 401,
+          error: error || 'OTP verification failed'
         });
       }
+      
+      console.log(`[AuthController] OTP verified successfully for ${email}, proceeding with login`);
       // Also validate password (in case credentials changed) and update last_login
       const credCheck = await AuthService.validateCredentials(email, password, role, true);
       if (!credCheck.valid) {
@@ -227,6 +277,11 @@ class AuthController {
         });
       }
 
+      // Calculate session expiry details for frontend display
+      const expiresAtISO = expiresAt.toISOString();
+      const expiresAtTimestamp = expiresAt.getTime();
+      const expiresInSeconds = Math.floor((expiresAtTimestamp - Date.now()) / 1000);
+
       return res.status(200).json({
         status: 'success', // For frontend to recognize success
         success: true, // For frontend to recognize success
@@ -238,8 +293,10 @@ class AuthController {
         sessionId: sessionResult.sessionId, // For frontend localStorage compatibility
         userId: userId.toString(), // For frontend localStorage
         userRole: role, // For frontend localStorage
-        expiry: expiresAt.toISOString(),
-        expiresAt: expiresAt.getTime() // Unix timestamp for frontend localStorage
+        expiry: expiresAtISO, // ISO string format
+        expiresAt: expiresAtTimestamp, // Unix timestamp for frontend localStorage
+        expiresIn: expiresInSeconds, // Seconds until expiry (for countdown)
+        expiresAtFormatted: expiresAt.toLocaleString() // Human-readable format for display
       });
     }
 
@@ -248,6 +305,208 @@ class AuthController {
       message: 'Invalid step. Use: credential_validation, send_otp, or final_login',
       statusCode: 400
     });
+  }
+
+  // POST /api/refresh
+  // Refresh session token and extend expiry
+  static async refreshSession(req, res) {
+    try {
+      const authHeader = req.headers['authorization'];
+      const { session_id, jwt_token } = req.body;
+
+      // Get token from Authorization header or request body
+      let token = null;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7);
+      } else if (jwt_token) {
+        token = jwt_token;
+      }
+
+      if (!token) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Authorization Bearer token or jwt_token required',
+          statusCode: 400
+        });
+      }
+
+      // Verify current session exists and is valid
+      const { data: session, error: sessionError } = await SessionModel.findByJwtToken(token);
+
+      if (sessionError || !session) {
+        return res.status(401).json({
+          status: 'error',
+          message: 'Invalid or expired session',
+          statusCode: 401
+        });
+      }
+
+      // Verify JWT token is still valid
+      const secret = process.env.JWT_SECRET;
+      if (!secret) {
+        return res.status(500).json({
+          status: 'error',
+          message: 'Server configuration error',
+          statusCode: 500
+        });
+      }
+
+      let decoded;
+      try {
+        decoded = jwt.verify(token, secret);
+      } catch (error) {
+        return res.status(401).json({
+          status: 'error',
+          message: 'Invalid or expired token',
+          statusCode: 401
+        });
+      }
+
+      // Generate new JWT token
+      const newJwtToken = AuthService.generateJWT(decoded.user_id, decoded.email, decoded.role);
+
+      // Calculate new expiration (3 hours from now)
+      const newExpiresAt = new Date(Date.now() + (3 * 60 * 60 * 1000));
+
+      // Update session with new token and expiry
+      const { error: updateError } = await SessionModel.updateSession(session.session_id, {
+        jwt_token: newJwtToken,
+        expires_at: newExpiresAt.toISOString(),
+        updated_time: new Date().toISOString()
+      });
+
+      if (updateError) {
+        console.error('Session update error:', updateError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to refresh session',
+          statusCode: 500
+        });
+      }
+
+      // Calculate session expiry details for frontend display
+      const expiresAtISO = newExpiresAt.toISOString();
+      const expiresAtTimestamp = newExpiresAt.getTime();
+      const expiresInSeconds = Math.floor((expiresAtTimestamp - Date.now()) / 1000);
+
+      return res.status(200).json({
+        status: 'success',
+        success: true,
+        message: 'Session refreshed successfully',
+        token: newJwtToken,
+        jwtToken: newJwtToken,
+        session_id: session.session_id,
+        sessionId: session.session_id,
+        userId: decoded.user_id.toString(),
+        userRole: decoded.role,
+        expiry: expiresAtISO, // ISO string format
+        expiresAt: expiresAtTimestamp, // Unix timestamp for frontend localStorage
+        expiresIn: expiresInSeconds, // Seconds until expiry (for countdown)
+        expiresAtFormatted: newExpiresAt.toLocaleString(), // Human-readable format for display
+        statusCode: 200
+      });
+    } catch (error) {
+      console.error('Refresh session error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error',
+        statusCode: 500
+      });
+    }
+  }
+
+  // GET /api/validate-session
+  // Validate current session and return session info
+  static async validateSession(req, res) {
+    try {
+      const authHeader = req.headers['authorization'];
+      const { session_id, jwt_token } = req.query;
+
+      // Get token from Authorization header or query params
+      let token = null;
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7);
+      } else if (jwt_token) {
+        token = jwt_token;
+      } else if (session_id) {
+        // If only session_id provided, get session and use its jwt_token
+        const { data: session } = await SessionModel.findBySessionId(session_id);
+        if (session && session.jwt_token) {
+          token = session.jwt_token;
+        }
+      }
+
+      if (!token) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Authorization Bearer token, jwt_token, or session_id required',
+          statusCode: 400,
+          valid: false
+        });
+      }
+
+      // Verify JWT token
+      const secret = process.env.JWT_SECRET;
+      if (!secret) {
+        return res.status(500).json({
+          status: 'error',
+          message: 'Server configuration error',
+          statusCode: 500,
+          valid: false
+        });
+      }
+
+      let decoded;
+      try {
+        decoded = jwt.verify(token, secret);
+      } catch (error) {
+        return res.status(401).json({
+          status: 'error',
+          message: 'Invalid or expired token',
+          statusCode: 401,
+          valid: false
+        });
+      }
+
+      // Check session in database
+      const { data: session, error: sessionError } = await SessionModel.findByJwtToken(token);
+
+      if (sessionError || !session) {
+        return res.status(401).json({
+          status: 'error',
+          message: 'Session not found or expired',
+          statusCode: 401,
+          valid: false
+        });
+      }
+
+      // Session is valid
+      return res.status(200).json({
+        status: 'success',
+        valid: true,
+        message: 'Session is valid',
+        session: {
+          session_id: session.session_id,
+          user_id: session.user_id,
+          expires_at: session.expires_at,
+          created_time: session.created_time
+        },
+        user: {
+          user_id: decoded.user_id,
+          email: decoded.email,
+          role: decoded.role
+        },
+        statusCode: 200
+      });
+    } catch (error) {
+      console.error('Validate session error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error',
+        statusCode: 500,
+        valid: false
+      });
+    }
   }
 
   // POST /api/logout

@@ -1,8 +1,43 @@
 import supabase from '../config/database.js';
 
 class OTPModel {
+  // Generate a unique otp_id
+  static async generateOtpId() {
+    // Get the max otp_id from the table and increment it
+    // If table is empty, start from 1
+    const { data: maxRecord, error } = await supabase
+      .from('user_otp')
+      .select('otp_id')
+      .order('otp_id', { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error && error.code !== 'PGRST116') {
+      // If error is not "no rows", log it but continue
+      console.warn('Error getting max otp_id:', error);
+    }
+
+    // Use timestamp-based ID as fallback/primary method for uniqueness
+    // Combine timestamp (milliseconds) with random number for uniqueness
+    const timestamp = Date.now();
+    const random = Math.floor(Math.random() * 1000);
+    const generatedId = timestamp * 1000 + random;
+
+    // If we got a max record, use max + 1, otherwise use generated ID
+    const nextId = maxRecord && maxRecord.otp_id 
+      ? maxRecord.otp_id + 1 
+      : generatedId;
+
+    return nextId;
+  }
+
   // Create a new OTP record
   static async create(otpData) {
+    // Generate otp_id if not provided
+    if (!otpData.otp_id) {
+      otpData.otp_id = await this.generateOtpId();
+    }
+
     const { data, error } = await supabase
       .from('user_otp')
       .insert([otpData])
@@ -14,18 +49,47 @@ class OTPModel {
 
   // Get active OTP by user_id and purpose
   static async findActiveOTP(userId, purpose = 'login') {
-    const { data, error } = await supabase
-      .from('user_otp')
-      .select('*')
-      .eq('user_id', userId)
-      .eq('purpose', purpose)
-      .eq('is_used', false)
-      .gt('expires_at', new Date().toISOString())
-      .order('created_time', { ascending: false })
-      .limit(1)
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('user_otp')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('purpose', purpose)
+        .eq('is_used', false)
+        .gt('expires_at', new Date().toISOString())
+        .order('created_time', { ascending: false })
+        .limit(1)
+        .maybeSingle(); // Use maybeSingle() to return null instead of error when no rows
 
-    return { data, error };
+      // If no error but also no data, it means no active OTP found
+      if (!error && !data) {
+        // Try to find any recent OTP (even expired) for debugging
+        const { data: recentOTP } = await supabase
+          .from('user_otp')
+          .select('*')
+          .eq('user_id', userId)
+          .eq('purpose', purpose)
+          .order('created_time', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        
+        if (recentOTP) {
+          console.log(`[OTPModel] Found recent OTP (may be expired/used):`, {
+            otp_id: recentOTP.otp_id,
+            is_used: recentOTP.is_used,
+            expires_at: recentOTP.expires_at,
+            requestId: recentOTP.requestId
+          });
+        }
+        
+        return { data: null, error: { message: 'No active OTP found', code: 'NO_ACTIVE_OTP' } };
+      }
+
+      return { data, error };
+    } catch (err) {
+      console.error('[OTPModel] Exception in findActiveOTP:', err);
+      return { data: null, error: err };
+    }
   }
 
   // Verify OTP code
@@ -82,6 +146,30 @@ class OTPModel {
       .from('user_otp')
       .update({
         attempts: (currentAttempts + 1).toString()
+      })
+      .eq('otp_id', otpId);
+
+    return { error };
+  }
+
+  // Update requestId for an OTP record
+  static async updateRequestId(otpId, requestId) {
+    const { error } = await supabase
+      .from('user_otp')
+      .update({
+        requestId: requestId
+      })
+      .eq('otp_id', otpId);
+
+    return { error };
+  }
+
+  // Update OTP code when user enters it
+  static async updateOTPCode(otpId, otpCode) {
+    const { error } = await supabase
+      .from('user_otp')
+      .update({
+        otp_code: otpCode
       })
       .eq('otp_id', otpId);
 
