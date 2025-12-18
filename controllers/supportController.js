@@ -6,6 +6,18 @@ import PartnerModel from '../models/PartnerModel.js';
 import Validators from '../utils/validators.js';
 import supabase from '../config/database.js';
 import path from 'path';
+import axios from 'axios';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+
+// AWS S3 Client
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION || 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
+});
 
 class SupportController {
   // GET /support/get_all_backlog_data?employee_id={employee_id}
@@ -1831,7 +1843,43 @@ class SupportController {
 
       console.log(`[View Document] Extracted storage path: ${storagePath}`);
 
-      // Step 5: Download file from storage - try multiple buckets
+      // Step 5: Check if file_path is a Supabase URL or S3 path
+      const isSupabaseUrl = document.file_path && document.file_path.includes('/storage/v1/object/public/');
+      const isS3Path = !isSupabaseUrl && storagePath && !storagePath.startsWith('http');
+
+      if (isS3Path) {
+        // File is stored in S3 - generate presigned URL
+        console.log('[View Document] Detected S3 path, generating presigned URL');
+        
+        try {
+          const command = new GetObjectCommand({
+            Bucket: bucketName,
+            Key: storagePath
+          });
+          
+          const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+          
+          return res.status(200).json({
+            success: true,
+            url: presignedUrl,
+            document_id: document.document_id,
+            file_path: storagePath,
+            expires_in: 3600,
+            statusCode: 200
+          });
+        } catch (s3Error) {
+          console.error('[View Document] S3 presigned URL error:', s3Error.message);
+          return res.status(500).json({
+            status: 'error',
+            message: `Failed to generate S3 view URL: ${s3Error.message}`,
+            statusCode: 500
+          });
+        }
+      }
+
+      // File is in Supabase Storage - download from storage
+      console.log('[View Document] Detected Supabase Storage URL, downloading from storage');
+      
       const bucketVariations = [
         bucketName, // expc-{case_type_name}
         'case-documents', // Fallback bucket
