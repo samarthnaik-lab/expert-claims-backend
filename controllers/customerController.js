@@ -22,15 +22,168 @@ class CustomerController {
 
       console.log('[Customer] Get session details for mobile_number:', mobileNumber, 'header session_id:', headerSessionId);
 
-      // 1) Find customer by mobile number
+      // Normalize mobile number: remove spaces, dashes, and common country codes
+      const normalizeMobile = (num) => {
+        if (!num) return null;
+        // Convert to string and remove all non-digit characters
+        let normalized = num.toString().replace(/\D/g, '');
+        // Remove common Indian country codes (91, +91, 0091)
+        if (normalized.startsWith('91') && normalized.length > 10) {
+          normalized = normalized.substring(2);
+        } else if (normalized.startsWith('0091') && normalized.length > 10) {
+          normalized = normalized.substring(4);
+        }
+        return normalized;
+      };
+
+      const normalizedMobile = normalizeMobile(mobileNumber);
+      console.log('[Customer] Normalized mobile_number:', normalizedMobile);
+
+      // 1) Find customer by mobile number - try multiple formats
       // NOTE: We intentionally DO NOT filter by deleted_flag here,
       // because we still need to allow session lookup even if the
       // customer record has deleted_flag = true.
-      const { data: customer, error: customerError } = await supabase
+      
+      let customer = null;
+      let customerError = null;
+
+      // First, try exact match with original number (trimmed)
+      let { data: customerData, error: error1 } = await supabase
         .from('customers')
         .select('*')
-        .eq('mobile_number', mobileNumber)
+        .eq('mobile_number', mobileNumber.trim())
         .maybeSingle();
+
+      if (customerData) {
+        customer = customerData;
+        console.log('[Customer] Found customer with exact match:', mobileNumber);
+      } else if (error1) {
+        customerError = error1;
+        console.error('[Customer] Error with exact match:', error1);
+      }
+
+      // If not found, try normalized number
+      if (!customer && normalizedMobile && normalizedMobile !== mobileNumber) {
+        const { data: customerData2, error: error2 } = await supabase
+          .from('customers')
+          .select('*')
+          .eq('mobile_number', normalizedMobile)
+          .maybeSingle();
+
+        if (customerData2) {
+          customer = customerData2;
+          console.log('[Customer] Found customer with normalized match:', normalizedMobile);
+        } else if (error2) {
+          customerError = error2;
+          console.error('[Customer] Error with normalized match:', error2);
+        }
+      }
+
+      // If still not found, try with country code prefix (91)
+      if (!customer && normalizedMobile) {
+        const withCountryCode = '91' + normalizedMobile;
+        const { data: customerData3, error: error3 } = await supabase
+          .from('customers')
+          .select('*')
+          .eq('mobile_number', withCountryCode)
+          .maybeSingle();
+
+        if (customerData3) {
+          customer = customerData3;
+          console.log('[Customer] Found customer with country code:', withCountryCode);
+        } else if (error3) {
+          customerError = error3;
+          console.error('[Customer] Error with country code match:', error3);
+        }
+      }
+
+      // If still not found, try ILIKE for partial match (case-insensitive) - try both original and normalized
+      if (!customer) {
+        // Try with original number
+        const { data: customerData4a, error: error4a } = await supabase
+          .from('customers')
+          .select('*')
+          .ilike('mobile_number', `%${mobileNumber}%`)
+          .limit(1)
+          .maybeSingle();
+
+        if (customerData4a) {
+          customer = customerData4a;
+          console.log('[Customer] Found customer with ILIKE match (original):', mobileNumber, 'stored as:', customerData4a.mobile_number);
+        } else if (error4a) {
+          customerError = error4a;
+          console.error('[Customer] Error with ILIKE match (original):', error4a);
+        }
+      }
+
+      // Try with normalized number
+      if (!customer && normalizedMobile) {
+        const { data: customerData4, error: error4 } = await supabase
+          .from('customers')
+          .select('*')
+          .ilike('mobile_number', `%${normalizedMobile}%`)
+          .limit(1)
+          .maybeSingle();
+
+        if (customerData4) {
+          customer = customerData4;
+          console.log('[Customer] Found customer with ILIKE match (normalized):', normalizedMobile, 'stored as:', customerData4.mobile_number);
+        } else if (error4) {
+          customerError = error4;
+          console.error('[Customer] Error with ILIKE match (normalized):', error4);
+        }
+      }
+
+      // Debug: If still not found, query for similar mobile numbers to see what format exists
+      if (!customer) {
+        console.log('[Customer] DEBUG: No customer found. Searching for similar mobile numbers...');
+        
+        // Try to find by last 6 digits
+        const last6Digits = normalizedMobile ? normalizedMobile.substring(normalizedMobile.length - 6) : mobileNumber.substring(mobileNumber.length - 6);
+        const first6Digits = normalizedMobile ? normalizedMobile.substring(0, 6) : mobileNumber.substring(0, 6);
+        
+        const { data: similarCustomers, error: debugError } = await supabase
+          .from('customers')
+          .select('customer_id, mobile_number, first_name, last_name')
+          .or(`mobile_number.ilike.%${last6Digits}%,mobile_number.ilike.%${first6Digits}%`)
+          .limit(10);
+
+        if (!debugError && similarCustomers && similarCustomers.length > 0) {
+          console.log('[Customer] DEBUG: Found similar mobile numbers in database:', similarCustomers.map(c => ({
+            customer_id: c.customer_id,
+            mobile_number: c.mobile_number,
+            mobile_number_length: c.mobile_number ? c.mobile_number.length : 0,
+            mobile_number_type: typeof c.mobile_number,
+            name: `${c.first_name || ''} ${c.last_name || ''}`.trim()
+          })));
+          
+          // Check if any of these match when we normalize them
+          for (const similar of similarCustomers) {
+            if (similar.mobile_number) {
+              const similarNormalized = normalizeMobile(similar.mobile_number);
+              if (similarNormalized === normalizedMobile || similarNormalized === mobileNumber) {
+                console.log('[Customer] DEBUG: Found match after normalization!', {
+                  stored: similar.mobile_number,
+                  normalized: similarNormalized,
+                  searched: normalizedMobile
+                });
+                // Fetch full customer record
+                const { data: fullCustomer } = await supabase
+                  .from('customers')
+                  .select('*')
+                  .eq('customer_id', similar.customer_id)
+                  .single();
+                if (fullCustomer) {
+                  customer = fullCustomer;
+                  break;
+                }
+              }
+            }
+          }
+        } else {
+          console.log('[Customer] DEBUG: No similar mobile numbers found in database');
+        }
+      }
 
       if (customerError) {
         console.error('[Customer] Error fetching customer by mobile_number:', customerError);
@@ -39,6 +192,30 @@ class CustomerController {
           message: 'Failed to fetch customer',
           error: customerError.message || 'Unknown error'
         }]);
+      }
+
+      if (!customer) {
+        console.log('[Customer] No customer found after trying all formats. Searched for:', {
+          original: mobileNumber,
+          normalized: normalizedMobile,
+          withCountryCode: normalizedMobile ? '91' + normalizedMobile : null
+        });
+        
+        // Try one more time with a broader search using the last 8 digits
+        if (normalizedMobile && normalizedMobile.length >= 8) {
+          const last8Digits = normalizedMobile.substring(normalizedMobile.length - 8);
+          const { data: broadMatch, error: broadError } = await supabase
+            .from('customers')
+            .select('customer_id, mobile_number, first_name, last_name')
+            .ilike('mobile_number', `%${last8Digits}%`)
+            .limit(1)
+            .maybeSingle();
+
+          if (broadMatch) {
+            console.log('[Customer] Found customer with last 8 digits match:', last8Digits, 'stored as:', broadMatch.mobile_number);
+            customer = broadMatch;
+          }
+        }
       }
 
       if (!customer) {
