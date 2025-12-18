@@ -5,6 +5,7 @@ import BacklogModel from '../models/BacklogModel.js';
 import BacklogCommentModel from '../models/BacklogCommentModel.js';
 import path from 'path';
 import nodemailer from 'nodemailer';
+import bcrypt from 'bcryptjs';
 
 // Email configuration constants
 const DEFAULT_EMPLOYEE_ID = 61;
@@ -224,11 +225,12 @@ class AdminController {
       const offset = (pageNum - 1) * sizeNum;
 
       // Fetch users with pagination (exclude deleted users)
+      // Order by user_id in descending order (newest first)
       const { data: users, error: usersError, count } = await supabase
         .from('users')
         .select('*', { count: 'exact' })
         .eq('deleted_flag', false)
-        .order('user_id', { ascending: true })
+        .order('user_id', { ascending: false })
         .range(offset, offset + sizeNum - 1);
 
       if (usersError) {
@@ -628,16 +630,40 @@ class AdminController {
         }]);
       }
 
-      // Validate password format (should be bcrypt hash)
-      if (!password.startsWith('$2b$') && !password.startsWith('$2a$') && !password.startsWith('$2y$')) {
-        return res.status(400).json([{
-          status: 'error',
-          message: 'Validation failed',
-          error_code: 'VALIDATION_ERROR',
-          field_errors: {
-            password: 'Password must be a valid bcrypt hash'
-          }
-        }]);
+      // Validate and hash password
+      let passwordHash = password;
+      
+      // Check if password is already a valid bcrypt hash
+      const isBcryptHash = password && typeof password === 'string' && 
+        (password.startsWith('$2b$') || password.startsWith('$2a$') || password.startsWith('$2y$'));
+      
+      if (!isBcryptHash) {
+        // Generate password based on first_name and last_name if password is not a valid hash
+        // Use first_name + last_name + a random number as the password
+        const nameBasedPassword = `${first_name || 'user'}${last_name || ''}${Date.now()}`.toLowerCase();
+        
+        try {
+          // Generate bcrypt hash with salt rounds 10
+          passwordHash = await bcrypt.hash(nameBasedPassword, 10);
+          console.log('[Admin] Auto-generated password hash for user:', email_address);
+          logger.logInfo('[Admin] Auto-generated password hash', {
+            operation: 'createUser',
+            email: email_address,
+            reason: 'Password was not a valid bcrypt hash'
+          });
+        } catch (hashError) {
+          logger.logError(hashError, req, {
+            operation: 'createUser',
+            context: 'Password Hashing',
+            errorType: 'PasswordHashError'
+          });
+          return res.status(500).json([{
+            status: 'error',
+            message: 'Failed to hash password',
+            error_code: 'INTERNAL_ERROR',
+            error_details: hashError?.message || 'Unknown error'
+          }]);
+        }
       }
 
       // Validate role
@@ -651,6 +677,42 @@ class AdminController {
           field_errors: {
             role: 'Invalid role. Must be one of: admin, employee, partner, customer'
           }
+        }]);
+      }
+
+      // Validate role-specific required fields
+      const roleFieldErrors = {};
+      if (normalizedRole === 'employee') {
+        if (!designation || (typeof designation === 'string' && designation.trim() === '')) {
+          roleFieldErrors.designation = 'Designation is required for employee role';
+        }
+        if (!department || (typeof department === 'string' && department.trim() === '')) {
+          roleFieldErrors.department = 'Department is required for employee role';
+        }
+        if (!joining_date || (typeof joining_date === 'string' && joining_date.trim() === '')) {
+          roleFieldErrors.joining_date = 'Joining date is required for employee role';
+        }
+        if (!employment_status || (typeof employment_status === 'string' && employment_status.trim() === '')) {
+          roleFieldErrors.employment_status = 'Employment status is required for employee role';
+        }
+      } else if (normalizedRole === 'partner') {
+        if (!partner_type || (typeof partner_type === 'string' && partner_type.trim() === '')) {
+          roleFieldErrors.partner_type = 'Partner type is required for partner role';
+        }
+      }
+
+      // Return validation errors if any role-specific fields are missing
+      if (Object.keys(roleFieldErrors).length > 0) {
+        logger.logFailedOperation(req, 400, 'VALIDATION_ERROR', 'Validation failed - missing role-specific required fields', {
+          operation: 'createUser',
+          role: normalizedRole,
+          fieldErrors: roleFieldErrors
+        });
+        return res.status(400).json([{
+          status: 'error',
+          message: 'Validation failed',
+          error_code: 'VALIDATION_ERROR',
+          field_errors: roleFieldErrors
         }]);
       }
 
@@ -751,7 +813,7 @@ class AdminController {
         username: username,
         email: email_address,
         mobile_number: mobile_number || null,
-        password_hash: password, // Password is already hashed from frontend
+        password_hash: passwordHash, // Use the hashed password (either provided or auto-generated)
         role: normalizedRole,
         status: 'active',
         created_time: now,
@@ -784,7 +846,20 @@ class AdminController {
 
       // Create role-specific record
       if (normalizedRole === 'employee') {
+        // Get next employee_id by finding max and incrementing
+        const { data: maxEmployees, error: maxEmpError } = await supabase
+          .from('employees')
+          .select('employee_id')
+          .order('employee_id', { ascending: false })
+          .limit(1);
+
+        let nextEmployeeId = 1;
+        if (!maxEmpError && maxEmployees && maxEmployees.length > 0 && maxEmployees[0].employee_id) {
+          nextEmployeeId = parseInt(maxEmployees[0].employee_id) + 1;
+        }
+
         const employeeData = {
+          employee_id: nextEmployeeId,
           user_id: userId,
           first_name: first_name,
           last_name: last_name,
@@ -817,16 +892,32 @@ class AdminController {
             rollback: 'Deleting user record due to employee creation failure'
           });
           console.error('[Admin] Error creating employee record:', employeeError);
+          console.error('[Admin] Employee error details:', JSON.stringify(employeeError, null, 2));
           // Rollback user creation
           await supabase.from('users').delete().eq('user_id', userId);
           return res.status(500).json([{
             status: 'error',
-            message: 'Failed to create user',
-            error_code: 'INTERNAL_ERROR'
+            message: 'Failed to create employee record',
+            error_code: 'INTERNAL_ERROR',
+            error_details: employeeError?.message || 'Unknown error',
+            error_hint: employeeError?.hint || null
           }]);
         }
       } else if (normalizedRole === 'partner') {
+        // Get next partner_id by finding max and incrementing
+        const { data: maxPartners, error: maxPartnerError } = await supabase
+          .from('partners')
+          .select('partner_id')
+          .order('partner_id', { ascending: false })
+          .limit(1);
+
+        let nextPartnerId = 1;
+        if (!maxPartnerError && maxPartners && maxPartners.length > 0 && maxPartners[0].partner_id) {
+          nextPartnerId = parseInt(maxPartners[0].partner_id) + 1;
+        }
+
         const partnerData = {
+          partner_id: nextPartnerId,
           user_id: userId,
           first_name: first_name,
           last_name: last_name,
@@ -853,15 +944,31 @@ class AdminController {
 
         if (partnerError) {
           console.error('[Admin] Error creating partner record:', partnerError);
+          console.error('[Admin] Partner error details:', JSON.stringify(partnerError, null, 2));
           await supabase.from('users').delete().eq('user_id', userId);
           return res.status(500).json([{
             status: 'error',
-            message: 'Failed to create user',
-            error_code: 'INTERNAL_ERROR'
+            message: 'Failed to create partner record',
+            error_code: 'INTERNAL_ERROR',
+            error_details: partnerError?.message || 'Unknown error',
+            error_hint: partnerError?.hint || null
           }]);
         }
       } else if (normalizedRole === 'customer') {
+        // Get next customer_id by finding max and incrementing
+        const { data: maxCustomers, error: maxCustomerError } = await supabase
+          .from('customers')
+          .select('customer_id')
+          .order('customer_id', { ascending: false })
+          .limit(1);
+
+        let nextCustomerId = 1;
+        if (!maxCustomerError && maxCustomers && maxCustomers.length > 0 && maxCustomers[0].customer_id) {
+          nextCustomerId = parseInt(maxCustomers[0].customer_id) + 1;
+        }
+
         const customerData = {
+          customer_id: nextCustomerId,
           user_id: userId,
           first_name: first_name,
           last_name: last_name,
@@ -892,11 +999,14 @@ class AdminController {
 
         if (customerError) {
           console.error('[Admin] Error creating customer record:', customerError);
+          console.error('[Admin] Customer error details:', JSON.stringify(customerError, null, 2));
           await supabase.from('users').delete().eq('user_id', userId);
           return res.status(500).json([{
             status: 'error',
-            message: 'Failed to create user',
-            error_code: 'INTERNAL_ERROR'
+            message: 'Failed to create customer record',
+            error_code: 'INTERNAL_ERROR',
+            error_details: customerError?.message || 'Unknown error',
+            error_hint: customerError?.hint || null
           }]);
         }
       } else if (normalizedRole === 'admin') {
@@ -1800,7 +1910,8 @@ class AdminController {
         console.log(`[Admin] Gap Analysis - Fetching backlog entries for employee_id: ${employeeIdNum}`);
       }
 
-      const { data: backlogList, error: backlogError } = await query.order('created_time', { ascending: false });
+      // Order by backlog_id in descending order (newest backlog entries first)
+      const { data: backlogList, error: backlogError } = await query.order('backlog_id', { ascending: false });
 
       if (backlogError) {
         logger.logDatabaseError(backlogError, 'SELECT', 'backlog', {
@@ -3896,6 +4007,7 @@ class AdminController {
       const offset = (pageNum - 1) * sizeNum;
 
       // Fetch cases (tasks) with pagination and all relationships
+      // Order by case_id in descending order (newest cases first)
       const { data: casesList, error: casesError, count } = await supabase
         .from('cases')
         .select(`
@@ -3912,7 +4024,7 @@ class AdminController {
           )
         `, { count: 'exact' })
         .eq('deleted_flag', false)
-        .order('created_time', { ascending: false })
+        .order('case_id', { ascending: false })
         .range(offset, offset + sizeNum - 1);
 
       if (casesError) {
