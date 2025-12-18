@@ -71,6 +71,18 @@ class SessionModel {
     return { error };
   }
 
+  // Update session by session_id
+  static async updateSession(sessionId, updateData) {
+    const { data, error } = await supabase
+      .from('user_session_details')
+      .update(updateData)
+      .eq('session_id', sessionId)
+      .select()
+      .single();
+
+    return { data, error };
+  }
+
   // Delete expired sessions
   static async deleteExpired() {
     const now = new Date().toISOString();
@@ -78,6 +90,21 @@ class SessionModel {
       .from('user_session_details')
       .update({ is_active: false, deleted_flag: true })
       .lt('expires_at', now);
+
+    return { error };
+  }
+
+  // Cleanup inactive sessions older than specified days
+  static async cleanupInactiveSessions(daysOld = 30) {
+    const cutoffDate = new Date();
+    cutoffDate.setDate(cutoffDate.getDate() - daysOld);
+    const cutoffISO = cutoffDate.toISOString();
+
+    const { error } = await supabase
+      .from('user_session_details')
+      .update({ is_active: false, deleted_flag: true })
+      .lt('updated_time', cutoffISO)
+      .eq('is_active', true);
 
     return { error };
   }
