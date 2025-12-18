@@ -1859,14 +1859,14 @@ class SupportController {
           
           const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
           
-          return res.status(200).json({
+          return res.status(200).json([{
             success: true,
             url: presignedUrl,
             document_id: document.document_id,
             file_path: storagePath,
             expires_in: 3600,
             statusCode: 200
-          });
+          }]);
         } catch (s3Error) {
           console.error('[View Document] S3 presigned URL error:', s3Error.message);
           return res.status(500).json({
