@@ -22,6 +22,7 @@
 | `multer` | ^2.0.2 | File upload handling |
 | `axios` | ^1.13.2 | HTTP client for external API calls |
 | `uuid` | ^13.0.0 | UUID generation |
+| `nodemailer` | Latest | Email sending functionality |
 
 ### Development Dependencies
 
@@ -68,6 +69,15 @@ MSG91_API_KEY=your_msg91_api_key
 
 # Server Configuration (Optional)
 PORT=3000
+
+# Email/SMTP Configuration (Required for comment notifications)
+SMTP_HOST=smtp.expertclaims.co.in
+SMTP_PORT=587
+SMTP_USER=analytics@expertclaims.co.in
+SMTP_PASS=ExpertAnalysis@2025
+FROM_EMAIL=analytics@expertclaims.co.in
+FALLBACK_EMAIL=samarth.naik@aiklisolve.com
+LOGIN_URL=https://expert-claims-g8p9.vercel.app/login
 ```
 
 ### Getting Supabase Credentials

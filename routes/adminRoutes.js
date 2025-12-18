@@ -123,6 +123,14 @@ router.patch(
   AdminController.updateStatusTechnicalConsultant
 );
 
+// POST /admin/addsummary
+// Add expert summary/description to a backlog case
+router.post(
+  '/addsummary',
+  // AuthMiddleware.authenticate,
+  AdminController.addSummary
+);
+
 // POST /admin/comments_insert
 // Add a comment to a backlog/case
 router.post(
@@ -152,6 +160,12 @@ router.patch(
   '/deletecase',
   // AuthMiddleware.authenticate,
   AdminController.deleteCase
+);
+
+router.get(
+  '/gettasks',
+  // AuthMiddleware.authenticate,
+  AdminController.getTasks
 );
 
 export default router;
