@@ -4075,6 +4075,25 @@ class AdminController {
         }]);
       }
 
+      // Valid ticket_stage values (same as statusMap in dashboard)
+      const validTicketStages = [
+        "Under Evaluation",
+        "Evaluation under review",
+        "Evaluated",
+        "Agreement pending",
+        "1st Instalment Pending",
+        "Under process",
+        "Pending with grievance cell of insurance company",
+        "Pending with Ombudsman",
+        "Under Litigation/Consumer Forum",
+        "Under Arbitration",
+        "on hold",
+        "Completed",
+        "Partner Payment Pending",
+        "Partner Payment Done",
+        "Cancelled"
+      ];
+
       // Transform and flatten cases data to match frontend requirements
       const flattenedTasks = (casesList || []).map(caseItem => {
         const caseData = { ...caseItem };
@@ -4087,12 +4106,20 @@ class AdminController {
         delete caseData.partners;
         delete caseData.employees;
 
+        // Validate and sanitize ticket_stage
+        let validTicketStage = caseData.ticket_stage || null;
+        if (validTicketStage && !validTicketStages.includes(validTicketStage)) {
+          // Invalid ticket_stage found - set to null or log warning
+          console.warn(`[Admin] Invalid ticket_stage found: "${validTicketStage}" for case_id: ${caseData.case_id}`);
+          validTicketStage = null;
+        }
+
         // Required fields as per frontend requirements
         // Basic case fields (already in caseData)
         const task = {
           case_id: caseData.case_id || null,
           case_summary: caseData.case_summary || null,
-          ticket_stage: caseData.ticket_stage || null,
+          ticket_stage: validTicketStage,
           case_description: caseData.case_description || null,
           priority: caseData.priority || null,
           case_value: caseData.case_value || null,
