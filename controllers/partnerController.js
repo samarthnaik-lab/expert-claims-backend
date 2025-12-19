@@ -3,6 +3,7 @@ import ReferralModel from '../models/ReferralModel.js';
 import BonusModel from '../models/BonusModel.js';
 import CaseModel from '../models/CaseModel.js';
 import CustomerModel from '../models/CustomerModel.js';
+import UserModel from '../models/UserModel.js';
 import StakeholderModel from '../models/StakeholderModel.js';
 import CommentModel from '../models/CommentModel.js';
 import PaymentModel from '../models/PaymentModel.js';
@@ -14,6 +15,7 @@ import Validators from '../utils/validators.js';
 import supabase from '../config/database.js';
 import path from 'path';
 import nodemailer from 'nodemailer';
+import bcrypt from 'bcryptjs';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
 // AWS S3 Client
@@ -568,7 +570,84 @@ class PartnerController {
           if (existingCustomer) {
             customerId = existingCustomer.customer_id;
           } else {
-            // Get next customer_id by finding max and incrementing
+            // Step 1: Check if user already exists with email or mobile number
+            let existingUser = null;
+            let customerUserId = null;
+
+            if (customer.email) {
+              const { data: userByEmail } = await UserModel.findByEmail(customer.email);
+              if (userByEmail) {
+                existingUser = userByEmail;
+                customerUserId = userByEmail.user_id;
+              }
+            }
+
+            // If not found by email, try mobile number
+            if (!existingUser && customer.mobileNumber) {
+              const { data: userByMobile } = await UserModel.findByMobileAndRole(customer.mobileNumber, 'customer');
+              if (userByMobile) {
+                existingUser = userByMobile;
+                customerUserId = userByMobile.user_id;
+              }
+            }
+
+            // Step 2: Create user entry if it doesn't exist
+            if (!existingUser) {
+              // Get next user_id by finding max and incrementing
+              const { data: maxUsers, error: maxUserError } = await supabase
+                .from('users')
+                .select('user_id')
+                .order('user_id', { ascending: false })
+                .limit(1);
+
+              let nextUserId = 1;
+              if (!maxUserError && maxUsers && maxUsers.length > 0 && maxUsers[0].user_id) {
+                nextUserId = parseInt(maxUsers[0].user_id) + 1;
+              }
+
+              // Generate username from email or mobile number
+              const username = customer.email 
+                ? customer.email.split('@')[0] 
+                : (customer.mobileNumber ? `customer_${customer.mobileNumber}` : `customer_${nextUserId}`);
+
+              // Auto-generate password hash from first_name + last_name + timestamp
+              const passwordString = `${customer.firstName}${customer.lastName}${Date.now()}`;
+              const passwordHash = await bcrypt.hash(passwordString, 10);
+
+              const now = new Date().toISOString();
+              const userData = {
+                user_id: nextUserId,
+                username: username,
+                email: customer.email || null,
+                mobile_number: customer.mobileNumber || null,
+                password_hash: passwordHash,
+                role: 'customer',
+                status: 'active',
+                created_time: now,
+                updated_time: now,
+                deleted_flag: false
+              };
+
+              const { data: newUser, error: userError } = await supabase
+                .from('users')
+                .insert([userData])
+                .select('user_id')
+                .single();
+
+              if (userError || !newUser) {
+                console.error('[Partner] Error creating user for customer:', userError);
+                return res.status(500).json([{
+                  message: 'Failed to create user for customer',
+                  case_id: null,
+                  error: userError?.message || 'Unknown error'
+                }]);
+              }
+
+              customerUserId = newUser.user_id;
+              console.log(`[Partner] Created user for customer: user_id=${customerUserId}`);
+            }
+
+            // Step 3: Get next customer_id by finding max and incrementing
             const { data: maxCustomers, error: maxCustomerError } = await supabase
               .from('customers')
               .select('customer_id')
@@ -580,8 +659,10 @@ class PartnerController {
               nextCustomerId = parseInt(maxCustomers[0].customer_id) + 1;
             }
 
+            // Step 4: Create customer record with user_id
             const { data: newCustomer, error: customerError } = await CustomerModel.create({
               customer_id: nextCustomerId,
+              user_id: customerUserId, // Link to user
               first_name: customer.firstName,
               last_name: customer.lastName,
               email_address: customer.email || null,
@@ -608,6 +689,19 @@ class PartnerController {
             if (!customerError && newCustomer) {
               customerId = newCustomer.customer_id;
               customerCreated = true;
+              console.log(`[Partner] Created customer: customer_id=${customerId}, user_id=${customerUserId}`);
+            } else {
+              console.error('[Partner] Error creating customer:', customerError);
+              // Rollback: Delete user if customer creation failed
+              if (customerUserId && !existingUser) {
+                await supabase.from('users').delete().eq('user_id', customerUserId);
+                console.log(`[Partner] Rolled back user creation: user_id=${customerUserId}`);
+              }
+              return res.status(500).json([{
+                message: 'Failed to create customer record',
+                case_id: null,
+                error: customerError?.message || 'Unknown error'
+              }]);
             }
           }
         }
