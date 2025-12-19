@@ -44,7 +44,7 @@ class ReferralModel {
       .from('backlog')
       .select('*')
       .eq('backlog_referring_partner_id', partnerId)
-      .order('backlog_referral_date', { ascending: false });
+      .order('backlog_id', { ascending: false });
 
     return { data, error };
   }

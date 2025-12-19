@@ -2566,6 +2566,238 @@ class PartnerController {
       });
     }
   }
+
+  // POST /webhook/partner_creation
+  // Create a new partner with user account
+  static async createPartner(req, res) {
+    try {
+      const { user, partner } = req.body;
+
+      console.log('[Partner] Creating partner:', { email: user?.email, username: user?.username });
+
+      // Validate required fields
+      const fieldErrors = {};
+
+      // Validate user object
+      if (!user) {
+        fieldErrors.user = 'User object is required';
+      } else {
+        if (!user.username) fieldErrors['user.username'] = 'Username is required';
+        if (!user.email) fieldErrors['user.email'] = 'Email is required';
+        if (!user.password_hash) fieldErrors['user.password_hash'] = 'Password hash is required';
+        if (!user.mobile_number) fieldErrors['user.mobile_number'] = 'Mobile number is required';
+        if (!user.role) fieldErrors['user.role'] = 'Role is required';
+        if (user.role && user.role.toLowerCase() !== 'partner') {
+          fieldErrors['user.role'] = 'Role must be "partner"';
+        }
+      }
+
+      // Validate partner object
+      if (!partner) {
+        fieldErrors.partner = 'Partner object is required';
+      } else {
+        if (!partner.first_name) fieldErrors['partner.first_name'] = 'First name is required';
+        if (!partner.last_name) fieldErrors['partner.last_name'] = 'Last name is required';
+        if (!partner.mobile_number) fieldErrors['partner.mobile_number'] = 'Mobile number is required';
+        if (!partner.emergency_contact) fieldErrors['partner.emergency_contact'] = 'Emergency contact is required';
+        if (!partner.partner_type) fieldErrors['partner.partner_type'] = 'Partner type is required';
+      }
+
+      if (Object.keys(fieldErrors).length > 0) {
+        return res.status(200).json([{
+          status: 'error',
+          message: 'Validation failed',
+          error_code: 'PARTNER_002',
+          field_errors: fieldErrors
+        }]);
+      }
+
+      // Validate email format
+      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+      if (!emailRegex.test(user.email)) {
+        return res.status(200).json([{
+          status: 'error',
+          message: 'Validation failed',
+          error_code: 'PARTNER_002',
+          field_errors: {
+            'user.email': 'Invalid email format'
+          }
+        }]);
+      }
+
+      // Check if email or username already exists
+      const { data: existingUsers, error: checkError } = await supabase
+        .from('users')
+        .select('user_id, email, username')
+        .or(`email.eq.${user.email},username.eq.${user.username}`);
+
+      if (checkError) {
+        console.error('[Partner] Error checking existing users:', checkError);
+        return res.status(200).json([{
+          status: 'error',
+          message: 'Failed to check existing users',
+          error_code: 'PARTNER_003'
+        }]);
+      }
+
+      if (existingUsers && existingUsers.length > 0) {
+        const fieldErrors = {};
+        const emailExists = existingUsers.some(u => u.email === user.email);
+        const usernameExists = existingUsers.some(u => u.username === user.username);
+
+        if (emailExists) {
+          fieldErrors['user.email'] = 'Email address is already registered';
+        }
+        if (usernameExists) {
+          fieldErrors['user.username'] = 'Username is already taken';
+        }
+
+        return res.status(200).json([{
+          status: 'error',
+          message: emailExists && usernameExists
+            ? 'Email and username already exist'
+            : emailExists
+              ? 'Email already exists'
+              : 'Username already exists',
+          error_code: 'PARTNER_001',
+          field_errors: fieldErrors
+        }]);
+      }
+
+      // Generate user_id
+      const { data: maxUsers, error: maxUserError } = await supabase
+        .from('users')
+        .select('user_id')
+        .order('user_id', { ascending: false })
+        .limit(1);
+
+      let nextUserId = 1;
+      if (!maxUserError && maxUsers && maxUsers.length > 0 && maxUsers[0].user_id) {
+        nextUserId = parseInt(maxUsers[0].user_id) + 1;
+      }
+
+      // Generate partner_id
+      const { data: maxPartners, error: maxPartnerError } = await supabase
+        .from('partners')
+        .select('partner_id')
+        .order('partner_id', { ascending: false })
+        .limit(1);
+
+      let nextPartnerId = 1;
+      if (!maxPartnerError && maxPartners && maxPartners.length > 0 && maxPartners[0].partner_id) {
+        nextPartnerId = parseInt(maxPartners[0].partner_id) + 1;
+      }
+
+      const now = new Date().toISOString();
+
+      // Create user in users table
+      const userData = {
+        user_id: nextUserId,
+        username: user.username,
+        email: user.email,
+        mobile_number: user.mobile_number || null,
+        password_hash: user.password_hash,
+        role: 'partner',
+        status: 'active',
+        created_time: now,
+        updated_time: now,
+        deleted_flag: false
+      };
+
+      const { data: newUser, error: userError } = await supabase
+        .from('users')
+        .insert([userData])
+        .select('user_id, username, email, role, created_time')
+        .single();
+
+      if (userError || !newUser) {
+        console.error('[Partner] Error creating user:', userError);
+        return res.status(200).json([{
+          status: 'error',
+          message: 'Failed to create user',
+          error_code: 'PARTNER_003',
+          error_details: userError?.message || 'Unknown error'
+        }]);
+      }
+
+      const userId = newUser.user_id;
+
+      // Create partner record
+      const partnerData = {
+        partner_id: nextPartnerId,
+        user_id: userId,
+        first_name: partner.first_name,
+        last_name: partner.last_name,
+        mobile_number: partner.mobile_number || null,
+        emergency_contact: partner.emergency_contact || null,
+        gender: partner.gender || 'male',
+        age: partner.age ? parseInt(partner.age) : 30,
+        address: partner.address || 'Address not provided',
+        partner_type: partner.partner_type,
+        'name of entity': partner.entity_name || null,
+        created_by: partner.created_by ? parseInt(partner.created_by) : 1,
+        updated_by: partner.updated_by ? parseInt(partner.updated_by) : 1,
+        created_at: now,
+        updated_at: now,
+        deleted_flag: false
+      };
+
+      // Add optional fields if provided
+      if (partner.gstin !== undefined) partnerData.gstin = partner.gstin || null;
+      if (partner.pan !== undefined) partnerData.pan = partner.pan || null;
+      if (partner.state !== undefined) partnerData.state = partner.state || null;
+      if (partner.pincode !== undefined) partnerData.pincode = partner.pincode || null;
+      if (partner.license_id !== undefined) partnerData.license_id = partner.license_id || null;
+      if (partner.license_expire_date !== undefined) partnerData.license_expire_date = partner.license_expire_date || null;
+
+      const { data: newPartner, error: partnerError } = await supabase
+        .from('partners')
+        .insert([partnerData])
+        .select('partner_id, first_name, last_name, partner_type, created_at, updated_at')
+        .single();
+
+      if (partnerError || !newPartner) {
+        console.error('[Partner] Error creating partner:', partnerError);
+        // Rollback user creation
+        await supabase.from('users').delete().eq('user_id', userId);
+        return res.status(200).json([{
+          status: 'error',
+          message: 'Failed to create partner record',
+          error_code: 'PARTNER_003',
+          error_details: partnerError?.message || 'Unknown error'
+        }]);
+      }
+
+      // Return success response
+      return res.status(200).json([{
+        status: 'success',
+        message: 'Partner created successfully',
+        data: {
+          user_id: userId,
+          partner_id: newPartner.partner_id,
+          username: newUser.username,
+          email: newUser.email,
+          mobile_number: user.mobile_number,
+          role: 'partner',
+          first_name: newPartner.first_name,
+          last_name: newPartner.last_name,
+          partner_type: newPartner.partner_type,
+          entity_name: partnerData['name of entity'],
+          created_at: newPartner.created_at,
+          updated_at: newPartner.updated_at
+        }
+      }]);
+
+    } catch (error) {
+      console.error('[Partner] Create partner error:', error);
+      return res.status(200).json([{
+        status: 'error',
+        message: 'Internal server error',
+        error_code: 'PARTNER_003',
+        error_details: error.message
+      }]);
+    }
+  }
 }
 
 export default PartnerController;

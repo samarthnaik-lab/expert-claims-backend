@@ -1268,144 +1268,229 @@ class SupportController {
   // View partner document - simple version
   static async partnerDocumentView(req, res) {
     try {
+      // apikey, authorization, jwt_token, and session_id validation commented out
+      // const { jwt_token, session_id, apikey } = req.headers;
       const { document_id } = req.body;
+
+      // Validate required fields
+      // apikey, jwt_token, and session_id validation commented out
+      // if (!jwt_token || !session_id || !apikey) {
+      //   return res.status(401).json({
+      //     success: false,
+      //     error: 'Missing authentication headers'
+      //   });
+      // }
 
       if (!document_id) {
         return res.status(400).json({
-          success: false,
-          error: 'document_id is required'
+          status: 'error',
+          message: 'document_id is required',
+          error_code: 'MISSING_DOCUMENT_ID',
+          statusCode: 400
         });
       }
 
-      console.log(`[View Document] Fetching document_id: ${document_id}`);
+      // Step 1: Validate session - commented out
+      // const session = await validateSession(session_id, jwt_token);
+      // 
+      // if (!session.valid) {
+      //   return res.status(401).json({
+      //     success: false,
+      //     error: 'Invalid session. Please login again.'
+      //   });
+      // }
 
-      // Step 1: Get document from database
-      const { data: document, error: docError } = await supabase
-        .from('backlog_documents')
-        .select('document_id, backlog_id, file_path')
-        .eq('document_id', document_id)
-        .maybeSingle();
+      // Additional validation: Check if apikey matches - commented out
+      // if (apikey !== SUPABASE_KEY) {
+      //   return res.status(401).json({
+      //     success: false,
+      //     error: 'Invalid API key'
+      //   });
+      // }
 
-      if (docError || !document) {
-        console.error('[View Document] Document not found:', docError);
+      // Step 2: Get backlog document details using Supabase REST API
+      const SUPABASE_URL = process.env.SUPABASE_URL || 'https://wrbnlvgecznyqelryjeq.supabase.co';
+      const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+      
+      const supabaseHeaders = {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        // Schema name 'expc' usage commented out
+        // 'Accept-Profile': 'expc',
+        // 'Content-Profile': 'expc'
+      };
+
+      let documentDetails;
+      try {
+        const response = await axios.get(
+          `${SUPABASE_URL}/rest/v1/backlog_documents`,
+          {
+            params: {
+              document_id: `eq.${document_id}`,
+              deleted_flag: 'is.false',
+              select: 'document_id,backlog_id,file_path'
+            },
+            headers: supabaseHeaders
+          }
+        );
+        if (response.data && response.data.length > 0) {
+          documentDetails = response.data[0];
+        } else {
+          return res.status(404).json({
+            status: 'error',
+            message: 'Document not found',
+            error_code: 'DOCUMENT_NOT_FOUND',
+            statusCode: 404
+          });
+        }
+      } catch (error) {
+        console.error('Get backlog document details error:', error.message);
         return res.status(404).json({
-          success: false,
-          error: 'Document not found'
+          status: 'error',
+          message: 'Document not found',
+          error_code: 'DOCUMENT_NOT_FOUND',
+          statusCode: 404
         });
       }
 
-      console.log(`[View Document] Found document: file_path=${document.file_path}`);
+      console.log(`[View Document] Found document: file_path=${documentDetails.file_path}`);
 
-      // Step 2: Get backlog to find case_type_name
-      const { data: backlog, error: backlogError } = await supabase
-        .from('backlog')
-        .select('case_type_id')
-        .eq('backlog_id', document.backlog_id)
-        .maybeSingle();
-
-      if (backlogError || !backlog) {
+      // Step 3: Get backlog details
+      let backlogDetails;
+      try {
+        const response = await axios.get(
+          `${SUPABASE_URL}/rest/v1/backlog`,
+          {
+            params: {
+              backlog_id: `eq.${documentDetails.backlog_id}`,
+              select: 'backlog_id,case_type_id'
+            },
+            headers: supabaseHeaders
+          }
+        );
+        if (response.data && response.data.length > 0) {
+          backlogDetails = response.data[0];
+        } else {
+          return res.status(404).json({
+            status: 'error',
+            message: 'Backlog details not found',
+            error_code: 'BACKLOG_NOT_FOUND',
+            statusCode: 404
+          });
+        }
+      } catch (error) {
+        console.error('Get backlog details error:', error.message);
         return res.status(404).json({
-          success: false,
-          error: 'Backlog not found'
+          status: 'error',
+          message: 'Backlog not found',
+          error_code: 'BACKLOG_NOT_FOUND',
+          statusCode: 404
         });
       }
 
-      // Step 3: Get case_type_name
-      const { data: caseType, error: caseError } = await supabase
-        .from('case_types')
-        .select('case_type_name')
-        .eq('case_type_id', backlog.case_type_id)
-        .maybeSingle();
-
-      if (caseError || !caseType) {
+      if (!backlogDetails || !backlogDetails.case_type_id) {
         return res.status(404).json({
-          success: false,
-          error: 'Case type not found'
+          status: 'error',
+          message: 'Backlog details not found',
+          error_code: 'BACKLOG_NOT_FOUND',
+          statusCode: 404
         });
       }
 
-      // Step 4: Construct bucket name
-      const bucketName = `expc-${caseType.case_type_name.trim().toLowerCase().replace(/\s+/g, '-')}`;
+      // Step 4: Get case type name
+      let caseType;
+      try {
+        const response = await axios.get(
+          `${SUPABASE_URL}/rest/v1/case_types`,
+          {
+            params: {
+              case_type_id: `eq.${backlogDetails.case_type_id}`,
+              select: 'case_type_name'
+            },
+            headers: supabaseHeaders
+          }
+        );
+        if (response.data && response.data.length > 0) {
+          caseType = response.data[0];
+        } else {
+          return res.status(404).json({
+            status: 'error',
+            message: 'Case type not found',
+            error_code: 'CASE_TYPE_NOT_FOUND',
+            statusCode: 404
+          });
+        }
+      } catch (error) {
+        console.error('Get case type error:', error.message);
+        return res.status(404).json({
+          status: 'error',
+          message: 'Case type not found',
+          error_code: 'CASE_TYPE_NOT_FOUND',
+          statusCode: 404
+        });
+      }
+
+      if (!caseType || !caseType.case_type_name) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Case type not found',
+          error_code: 'CASE_TYPE_NOT_FOUND',
+          statusCode: 404
+        });
+      }
+
+      // Step 5: Build bucket name
+      const caseTypeName = caseType.case_type_name;
+      const safeCaseType = caseTypeName
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '-');
+      const bucketName = `expc-${safeCaseType}`;
+
       console.log(`[View Document] Using bucket: ${bucketName}`);
 
-      // Step 5: Extract file path
-      let storagePath = document.file_path;
-      
-      console.log(`[View Document] Original file_path: ${storagePath}`);
-      
-      // If it's a full URL, extract just the path
-      if (storagePath && storagePath.includes('/storage/v1/object/public/')) {
-        const parts = storagePath.split('/storage/v1/object/public/');
-        if (parts.length > 1) {
-          const pathParts = parts[1].split('/');
-          // Remove bucket name (first part) and keep the rest
-          if (pathParts.length > 1) {
-            storagePath = pathParts.slice(1).join('/');
-          } else {
-            storagePath = parts[1];
-          }
+      // Step 6: Download file from S3
+      let downloadResult;
+      try {
+        const command = new GetObjectCommand({
+          Bucket: bucketName,
+          Key: documentDetails.file_path
+        });
+        const response = await s3Client.send(command);
+        
+        // Convert stream to buffer
+        const chunks = [];
+        for await (const chunk of response.Body) {
+          chunks.push(chunk);
         }
-      } else if (storagePath && storagePath.startsWith('bk-')) {
-        // Already in correct format: bk-ECSI-GA-25-086/filename.pdf
-        storagePath = storagePath;
-      } else if (storagePath && storagePath.includes(bucketName + '/')) {
-        // If path contains bucket name, remove it
-        storagePath = storagePath.split(bucketName + '/')[1] || storagePath;
-      }
-
-      console.log(`[View Document] Extracted storage path: ${storagePath}`);
-
-      // Step 6: Download file from storage - try multiple buckets
-      const bucketVariations = [
-        bucketName, // expc-{case_type_name}
-        `public-${caseType.case_type_name.trim().toLowerCase().replace(/\s+/g, '-')}`, // public-{case_type_name}
-        'backlog-documents', // Fallback bucket
-        'public-fire' // Common bucket
-      ];
-
-      let fileData = null;
-      let downloadError = null;
-      let usedBucket = null;
-
-      for (const bucket of bucketVariations) {
-        console.log(`[View Document] Trying bucket: ${bucket}`);
-        const { data, error } = await supabase.storage
-          .from(bucket)
-          .download(storagePath);
-
-        if (!error && data) {
-          fileData = data;
-          usedBucket = bucket;
-          console.log(`[View Document] ✓ File found in bucket: ${bucket}`);
-          break;
-        } else {
-          console.log(`[View Document] ✗ Not found in bucket: ${bucket}, error: ${error?.message}`);
-          downloadError = error;
-        }
-      }
-
-      if (!fileData) {
-        console.error('[View Document] File not found in any bucket');
-        console.error('[View Document] Tried buckets:', bucketVariations);
-        console.error('[View Document] Storage path:', storagePath);
-        return res.status(500).json({
+        const buffer = Buffer.concat(chunks);
+        downloadResult = {
+          success: true,
+          buffer,
+          contentType: response.ContentType,
+          contentLength: response.ContentLength
+        };
+      } catch (error) {
+        console.error('S3 download error:', error.message);
+        downloadResult = {
           success: false,
-          error: 'File not found in storage',
-          details: {
-            tried_buckets: bucketVariations,
-            storage_path: storagePath,
-            case_type_name: caseType.case_type_name
-          }
+          error: error.message
+        };
+      }
+
+      if (!downloadResult.success) {
+        return res.status(500).json({
+          status: 'error',
+          message: `Failed to download file: ${downloadResult.error}`,
+          error_code: 'S3_DOWNLOAD_ERROR',
+          statusCode: 500
         });
       }
 
-      // Step 7: Return file
-      const arrayBuffer = await fileData.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      const ext = path.extname(storagePath).toLowerCase();
+      // Step 7: Return file as binary response (for viewing in browser)
+      const filename = documentDetails.file_path.split('/').pop();
       
-      // Determine Content-Type based on file extension
-      // Supported: PDF, DOC, DOCX, JPG, PNG, TXT
+      // Determine Content-Type based on file extension (fallback if S3 doesn't provide it)
       const contentTypeMap = {
         '.pdf': 'application/pdf',
         '.jpg': 'image/jpeg',
@@ -1413,25 +1498,32 @@ class SupportController {
         '.png': 'image/png',
         '.gif': 'image/gif',
         '.webp': 'image/webp',
+        '.svg': 'image/svg+xml',
         '.doc': 'application/msword',
         '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         '.txt': 'text/plain',
         '.xls': 'application/vnd.ms-excel',
         '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       };
-      const contentType = contentTypeMap[ext] || 'application/octet-stream';
+      const ext = path.extname(filename).toLowerCase();
+      const contentType = downloadResult.contentType || contentTypeMap[ext] || 'application/octet-stream';
 
-      console.log(`[View Document] Returning file: ${buffer.length} bytes, type: ${contentType}, extension: ${ext}`);
+      console.log(`[View Document] Returning file: ${downloadResult.buffer.length} bytes, type: ${contentType}`);
 
-      res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `inline; filename="${path.basename(storagePath)}"`);
-      return res.send(buffer);
-
+      res.set({
+        'Content-Type': contentType,
+        'Content-Length': downloadResult.contentLength || downloadResult.buffer.length,
+        'Content-Disposition': `inline; filename="${filename}"`,
+        'Cache-Control': 'no-cache'
+      });
+      return res.status(200).send(downloadResult.buffer);
     } catch (error) {
-      console.error('[View Document] Error:', error);
+      console.error('Partner document view error:', error);
       return res.status(500).json({
-        success: false,
-        error: 'Internal server error: ' + error.message
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        error_code: 'INTERNAL_ERROR',
+        statusCode: 500
       });
     }
   }
@@ -1767,6 +1859,7 @@ class SupportController {
         return res.status(400).json({
           status: 'error',
           message: 'document_id is required in request body',
+          error_code: 'MISSING_DOCUMENT_ID',
           statusCode: 400
         });
       }
@@ -1859,19 +1952,24 @@ class SupportController {
           
           const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
           
-          return res.status(200).json([{
+          // Return JSON response with URL for frontend to use
+          return res.status(200).json({
             success: true,
             url: presignedUrl,
+            document_url: presignedUrl, // Alternative field name
+            image_url: presignedUrl, // Alternative field name
+            file_url: presignedUrl, // Alternative field name
             document_id: document.document_id,
             file_path: storagePath,
             expires_in: 3600,
             statusCode: 200
-          }]);
+          });
         } catch (s3Error) {
           console.error('[View Document] S3 presigned URL error:', s3Error.message);
           return res.status(500).json({
             status: 'error',
             message: `Failed to generate S3 view URL: ${s3Error.message}`,
+            error_code: 'S3_URL_GENERATION_ERROR',
             statusCode: 500
           });
         }
@@ -1912,14 +2010,14 @@ class SupportController {
         console.error('[View Document] File not found in any bucket');
         console.error('[View Document] Tried buckets:', bucketVariations);
         console.error('[View Document] Storage path:', storagePath);
-        return res.status(500).json({
+        return res.status(404).json({
           status: 'error',
           message: 'File not found in storage',
           details: {
             tried_buckets: bucketVariations,
             storage_path: storagePath
           },
-          statusCode: 500
+          statusCode: 404
         });
       }
 
@@ -1955,6 +2053,7 @@ class SupportController {
       return res.status(500).json({
         status: 'error',
         message: 'Internal server error: ' + error.message,
+        error_code: 'INTERNAL_ERROR',
         statusCode: 500
       });
     }
@@ -2091,13 +2190,7 @@ class SupportController {
           case_types(*),
           customers(*),
           partners!cases_referring_partner_id_fkey(*),
-          employees!cases_assigned_to_fkey(
-            employee_id,
-            first_name,
-            last_name,
-            department,
-            designation
-          )
+          employees!cases_assigned_to_fkey(*)
         `)
         .eq('case_id', case_id)
         .eq('deleted_flag', false)
@@ -2157,18 +2250,7 @@ class SupportController {
         // 3. Get case_documents (filter out deleted)
         supabase
           .from('case_documents')
-          .select(`
-            *,
-            document_categories!case_documents_category_id_fkey(
-              category_id,
-              document_name,
-              is_mandatory
-            ),
-            users!case_documents_uploaded_by_fkey(
-              user_id,
-              email
-            )
-          `)
+          .select('*')
           .eq('case_id', case_id)
           .eq('deleted_flag', false)
           .order('upload_time', { ascending: false })
@@ -2206,101 +2288,89 @@ class SupportController {
           .catch(() => ({ data: [], error: null }))
       ]);
 
-      // Extract numeric case_id from string (e.g., "ECSI-25-121" -> 121)
-      // Try to extract the number after the last dash
-      let numericCaseId = null;
-      if (case_id && typeof case_id === 'string') {
-        const parts = case_id.split('-');
-        if (parts.length > 0) {
-          const lastPart = parts[parts.length - 1];
-          numericCaseId = parseInt(lastPart, 10);
-          if (isNaN(numericCaseId)) {
-            numericCaseId = null;
-          }
-        }
-      }
-
-      // Flatten case data and build response matching frontend requirements
-      // All fields must be at root level with exact field names
+      // Build response matching exact frontend requirements
       const response = {
-        // Case fields (flattened from caseData)
-        case_id: numericCaseId || caseData.case_id || case_id,
+        // Case fields at root level
+        case_id: caseData.case_id || case_id,
         case_summary: caseData.case_summary || null,
+        referring_partner_id: caseData.referring_partner_id || null,
+        assigned_to: caseData.assigned_to || null,
         case_description: caseData.case_description || null,
         priority: caseData.priority || null,
         ticket_stage: caseData.ticket_stage || null,
         due_date: caseData.due_date || null,
         case_value: caseData.case_value || null,
         value_currency: caseData.value_currency || null,
+        "service amount": caseData.service_amount || null,
+        "claim amount": caseData.claim_amount || null,
         customer_id: caseData.customer_id || null,
-        assigned_to: caseData.assigned_to || null,
         updated_time: caseData.updated_time || null,
-        created_time: caseData.created_time || null,
-        referral_date: caseData.referral_date || null,
-        referring_partner_id: caseData.referring_partner_id || null,
-        case_type_id: caseData.case_type_id || null,
-        resolution_summary: caseData.resolution_summary || null,
-        customer_satisfaction_rating: caseData.customer_satisfaction_rating || null,
-        referral_notes: caseData.referral_notes || null,
-        bonus_eligible: caseData.bonus_eligible || null,
-        value_confirmed: caseData.value_confirmed || null,
-        value_confirmed_by: caseData.value_confirmed_by || null,
-        value_confirmed_date: caseData.value_confirmed_date || null,
-        created_by: caseData.created_by || null,
-        updated_by: caseData.updated_by || null,
-        task_type: caseData.task_type || null,
-        service_amount: caseData.service_amount || null,
-        claim_amount: caseData.claim_amount || null,
         
-        // Related objects (flattened)
-        case_types: caseData.case_types ? {
-          case_type_id: caseData.case_types.case_type_id || null,
-          case_type_name: caseData.case_types.case_type_name || null,
-          description: caseData.case_types.description || null,
-          is_commercial: caseData.case_types.is_commercial || null,
-          is_active: caseData.case_types.is_active || null
-        } : null,
-        
-        customers: caseData.customers ? {
-          customer_id: caseData.customers.customer_id || null,
-          first_name: caseData.customers.first_name || null,
-          last_name: caseData.customers.last_name || null,
-          email_address: caseData.customers.email_address || null,
-          mobile_number: caseData.customers.mobile_number || null,
-          emergency_contact: caseData.customers.emergency_contact || null,
-          address: caseData.customers.address || null,
-          customer_type: caseData.customers.customer_type || null,
-          source: caseData.customers.source || null,
-          user_id: caseData.customers.user_id || null,
-          created_time: caseData.customers.created_time || null,
-          updated_time: caseData.customers.updated_time || null,
-          deleted_flag: caseData.customers.deleted_flag || false,
-          notes: caseData.customers.notes || null,
-          company_name: caseData.customers.company_name || null,
-          language_preference: caseData.customers.language_preference || null,
-          communication_preferences: caseData.customers.communication_preferences || null,
-          gender: caseData.customers.gender || null,
-          age: caseData.customers.age || null,
-          partner_id: caseData.customers.partner_id || null,
-          gstin: caseData.customers.gstin || null,
-          pan: caseData.customers.pan || null,
-          state: caseData.customers.state || null,
-          pincode: caseData.customers.pincode || null
-        } : null,
+        // Related arrays
+        case_documents: (documentsResult.data || []).map(doc => ({
+          case_id: doc.case_id || case_id,
+          checksum: doc.checksum || null,
+          file_path: doc.file_path || null,
+          file_size: doc.file_size || 0,
+          file_type: doc.file_type || "unknown",
+          is_active: doc.is_active !== undefined ? doc.is_active : true,
+          mime_type: doc.mime_type || null,
+          category_id: doc.category_id || null,
+          document_id: doc.document_id || null,
+          upload_time: doc.upload_time || null,
+          uploaded_by: doc.uploaded_by || null,
+          access_count: doc.access_count || 0,
+          deleted_flag: doc.deleted_flag || false,
+          version_number: doc.version_number || null,
+          stored_filename: doc.stored_filename || null,
+          original_filename: doc.original_filename || null,
+          last_accessed_time: doc.last_accessed_time || null,
+          is_customer_visible: doc.is_customer_visible !== undefined ? doc.is_customer_visible : false
+        })),
         
         employees: caseData.employees ? {
-          employee_id: caseData.employees.employee_id || null,
-          first_name: caseData.employees.first_name || null,
-          last_name: caseData.employees.last_name || null,
+          age: caseData.employees.age || null,
+          gender: caseData.employees.gender || "",
+          address: caseData.employees.address || null,
+          manager: caseData.employees.manager || null,
           user_id: caseData.employees.user_id || null,
+          last_name: caseData.employees.last_name || null,
+          team_name: caseData.employees.team_name || null,
+          created_by: caseData.employees.created_by || null,
           department: caseData.employees.department || null,
-          designation: caseData.employees.designation || null,
-          mobile_number: caseData.employees.mobile_number || null,
+          first_name: caseData.employees.first_name || null,
+          pan_number: caseData.employees.pan_number || null,
+          reports_to: caseData.employees.reports_to || null,
+          updated_by: caseData.employees.updated_by || null,
           work_phone: caseData.employees.work_phone || null,
-          email: caseData.employees.email || null
+          designation: caseData.employees.designation || null,
+          employee_id: caseData.employees.employee_id || null,
+          bank_details: caseData.employees.bank_details || null,
+          created_time: caseData.employees.created_time || null,
+          deleted_flag: caseData.employees.deleted_flag || false,
+          joining_date: caseData.employees.joining_date || null,
+          updated_time: caseData.employees.updated_time || null,
+          aadhar_number: caseData.employees.aadhar_number || null,
+          mobile_number: caseData.employees.mobile_number || null,
+          work_extension: caseData.employees.work_extension || null,
+          office_location: caseData.employees.office_location || null,
+          "additional notes": caseData.employees["additional notes"] || null,
+          management_level: caseData.employees.management_level || null,
+          emergency_contact: caseData.employees.emergency_contact || null,
+          employment_status: caseData.employees.employment_status || null,
+          can_approve_bonuses: caseData.employees.can_approve_bonuses || false,
+          profile_picture_url: caseData.employees.profile_picture_url || null,
+          "emergency contact Name": caseData.employees["emergency contact Name"] || null,
+          "communication preference": caseData.employees["communication preference"] || null,
+          max_bonus_approval_limit: caseData.employees.max_bonus_approval_limit || null,
+          "emergency contact relation": caseData.employees["emergency contact relation"] || null
         } : null,
         
-        // Related arrays with exact field names expected by frontend
+        case_types: caseData.case_types ? {
+          description: caseData.case_types.description || null,
+          case_type_name: caseData.case_types.case_type_name || null
+        } : null,
+        
         case_stakeholders: (stakeholdersResult.data || []).map(stakeholder => ({
           stakeholder_id: stakeholder.stakeholder_id || null,
           case_id: stakeholder.case_id || case_id,
@@ -2315,54 +2385,6 @@ class SupportController {
           updated_by: stakeholder.updated_by || null
         })),
         
-        case_comments: (commentsResult.data || []).map(comment => ({
-          case_id: comment.case_id || case_id,
-          user_id: comment.user_id || null,
-          comment_id: comment.comment_id || null,
-          is_internal: comment.is_internal || false,
-          comment_text: comment.comment_text || null,
-          created_time: comment.created_time || null,
-          updated_time: comment.updated_time || null,
-          parent_comment_id: comment.parent_comment_id || 0
-        })),
-        
-        case_documents: (documentsResult.data || []).map(doc => ({
-          document_id: doc.document_id || null,
-          case_id: doc.case_id || case_id,
-          category_id: doc.category_id || null,
-          original_filename: doc.original_filename || null,
-          stored_filename: doc.stored_filename || null,
-          file_path: doc.file_path || null,
-          file_size: doc.file_size || null,
-          file_type: doc.file_type || null,
-          mime_type: doc.mime_type || null,
-          upload_time: doc.upload_time || null,
-          uploaded_by: doc.uploaded_by || null,
-          is_customer_visible: doc.is_customer_visible || null,
-          is_active: doc.is_active || null,
-          document_categories: doc.document_categories || null
-        })),
-        
-        case_payment_phases: (paymentPhasesResult.data || []).map(phase => ({
-          case_phase_id: phase.case_phase_id || null,
-          case_id: phase.case_id || case_id,
-          phase_name: phase.phase_name || null,
-          case_type_id: phase.case_type_id || null,
-          phase_amount: phase.phase_amount || null,
-          due_date: phase.due_date || null,
-          status: phase.status || null,
-          paid_amount: phase.paid_amount || null,
-          payment_date: phase.payment_date || null,
-          payment_method: phase.payment_method || null,
-          transaction_reference: phase.transaction_reference || null,
-          invoice_number: phase.invoice_number || null,
-          notes: phase.notes || null,
-          created_time: phase.created_time || null,
-          updated_time: phase.updated_time || null,
-          created_by: phase.created_by || null,
-          updated_by: phase.updated_by || null
-        })),
-        
         case_stage_history: (stageHistoryResult.data || []).map(history => ({
           stage_history_id: history.stage_history_id || null,
           case_id: history.case_id || case_id,
@@ -2375,12 +2397,72 @@ class SupportController {
           created_by: history.created_by || null,
           users: history.users || null,
           employees: history.employees || null
-        }))
+        })),
+        
+        case_payment_phases: (paymentPhasesResult.data || []).map(phase => ({
+          notes: phase.notes || null,
+          status: phase.status || null,
+          case_id: phase.case_id || case_id,
+          due_date: phase.due_date || null,
+          created_by: phase.created_by || null,
+          phase_name: phase.phase_name || null,
+          updated_by: phase.updated_by || null,
+          paid_amount: phase.paid_amount || 0,
+          case_type_id: phase.case_type_id || null,
+          created_time: phase.created_time || null,
+          payment_date: phase.payment_date || null,
+          phase_amount: phase.phase_amount || null,
+          updated_time: phase.updated_time || null,
+          case_phase_id: phase.case_phase_id || null,
+          invoice_number: phase.invoice_number || null,
+          payment_method: phase.payment_method || null,
+          transaction_reference: phase.transaction_reference || null
+        })),
+        
+        case_comments: (commentsResult.data || []).map(comment => ({
+          case_id: comment.case_id || case_id,
+          user_id: comment.user_id || null,
+          comment_id: comment.comment_id || null,
+          is_internal: comment.is_internal || false,
+          comment_text: comment.comment_text || null,
+          created_time: comment.created_time || null,
+          updated_time: comment.updated_time || null,
+          parent_comment_id: comment.parent_comment_id || null
+        })),
+        
+        customers: caseData.customers ? {
+          age: caseData.customers.age || null,
+          pan: caseData.customers.pan || null,
+          gstin: caseData.customers.gstin || null,
+          notes: caseData.customers.notes || "",
+          state: caseData.customers.state || null,
+          gender: caseData.customers.gender || null,
+          source: caseData.customers.source || null,
+          address: caseData.customers.address || null,
+          pincode: caseData.customers.pincode || null,
+          user_id: caseData.customers.user_id || null,
+          last_name: caseData.customers.last_name || null,
+          created_by: caseData.customers.created_by || null,
+          first_name: caseData.customers.first_name || null,
+          partner_id: caseData.customers.partner_id || null,
+          updated_by: caseData.customers.updated_by || null,
+          customer_id: caseData.customers.customer_id || null,
+          "claim number": caseData.customers["claim number"] || null,
+          company_name: caseData.customers.company_name || null,
+          created_time: caseData.customers.created_time || null,
+          deleted_flag: caseData.customers.deleted_flag || false,
+          updated_time: caseData.customers.updated_time || null,
+          customer_type: caseData.customers.customer_type || null,
+          email_address: caseData.customers.email_address || null,
+          mobile_number: caseData.customers.mobile_number || null,
+          emergency_contact: caseData.customers.emergency_contact || "",
+          language_preference: caseData.customers.language_preference || "",
+          communication_preferences: caseData.customers.communication_preferences || null
+        } : null
       };
 
-      // Return direct object (Option 1 - Recommended format)
-      // Frontend can handle both array and object formats
-      return res.status(200).json(response);
+      // Return as array with single object (matching frontend requirements)
+      return res.status(200).json([response]);
 
     } catch (error) {
       console.error('[Support Team] Unexpected error in getEverythingCases:', error);
@@ -2857,6 +2939,17 @@ class SupportController {
           });
         }
 
+        // Validate and set status (must be 'paid' or 'pending')
+        let paymentStatus = 'pending'; // Default
+        if (payment.status) {
+          const statusLower = payment.status.toLowerCase();
+          if (statusLower === 'paid' || statusLower === 'pending') {
+            paymentStatus = statusLower;
+          } else {
+            console.warn(`[Create Payment Phases] Invalid status "${payment.status}", defaulting to "pending"`);
+          }
+        }
+
         const paymentPhaseData = {
           case_phase_id: nextPhaseId++,
           case_id: fullCaseId,
@@ -2864,7 +2957,7 @@ class SupportController {
           case_type_id: payment.case_type_id ? parseInt(payment.case_type_id) : existingCase.case_type_id || null,
           phase_amount: payment.phase_amount ? parseInt(payment.phase_amount) : null,
           due_date: payment.due_date || null,
-          status: payment.status || 'pending',
+          status: paymentStatus, // Use validated status
           paid_amount: payment.paid_amount ? parseInt(payment.paid_amount) : null,
           payment_date: payment.payment_date || null,
           payment_method: payment.payment_method || null,
@@ -2911,6 +3004,147 @@ class SupportController {
 
     } catch (error) {
       console.error('[Create Payment Phases] Error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // PATCH /webhook/updatepayment
+  // Update a payment phase by case_phase_id
+  static async updatePayment(req, res) {
+    try {
+      const {
+        case_phase_id,
+        phase_amount,
+        phase_name,
+        due_date,
+        status,
+        paid_amount,
+        payment_date,
+        payment_method,
+        transaction_reference,
+        invoice_number,
+        notes,
+        updated_by
+      } = req.body;
+
+      // Validate required field
+      if (!case_phase_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'case_phase_id is required',
+          statusCode: 400
+        });
+      }
+
+      console.log(`[Update Payment] Updating payment phase: ${case_phase_id}`);
+
+      // Step 1: Verify payment phase exists
+      const { data: existingPayment, error: paymentError } = await supabase
+        .from('case_payment_phases')
+        .select('*')
+        .eq('case_phase_id', parseInt(case_phase_id))
+        .single();
+
+      if (paymentError || !existingPayment) {
+        return res.status(404).json({
+          status: 'error',
+          message: `Payment phase with ID ${case_phase_id} not found`,
+          statusCode: 404
+        });
+      }
+
+      // Step 2: Prepare update data
+      const updateData = {
+        updated_time: new Date().toISOString()
+      };
+
+      // Only update fields that are provided (not undefined)
+      if (phase_amount !== undefined) {
+        updateData.phase_amount = phase_amount !== null ? parseInt(phase_amount) : null;
+      }
+
+      if (phase_name !== undefined) {
+        updateData.phase_name = phase_name || null;
+      }
+
+      if (due_date !== undefined) {
+        updateData.due_date = due_date || null;
+      }
+
+      if (status !== undefined) {
+        // Validate status value (should be 'paid' or 'pending')
+        if (status && !['paid', 'pending'].includes(status.toLowerCase())) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'status must be either "paid" or "pending"',
+            statusCode: 400
+          });
+        }
+        updateData.status = status ? status.toLowerCase() : 'pending';
+      }
+
+      if (paid_amount !== undefined) {
+        updateData.paid_amount = paid_amount !== null ? parseInt(paid_amount) : null;
+      }
+
+      if (payment_date !== undefined) {
+        updateData.payment_date = payment_date || null;
+      }
+
+      if (payment_method !== undefined) {
+        updateData.payment_method = payment_method || null;
+      }
+
+      if (transaction_reference !== undefined) {
+        updateData.transaction_reference = transaction_reference || null;
+      }
+
+      if (invoice_number !== undefined) {
+        updateData.invoice_number = invoice_number || null;
+      }
+
+      if (notes !== undefined) {
+        updateData.notes = notes || null;
+      }
+
+      if (updated_by !== undefined && updated_by !== null) {
+        updateData.updated_by = parseInt(updated_by);
+      }
+
+      // Step 3: Update the payment phase
+      const { data: updatedPayment, error: updateError } = await supabase
+        .from('case_payment_phases')
+        .update(updateData)
+        .eq('case_phase_id', parseInt(case_phase_id))
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('[Update Payment] Error updating payment phase:', updateError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to update payment phase',
+          error: updateError.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      console.log(`[Update Payment] Successfully updated payment phase: ${case_phase_id}`);
+
+      // Step 4: Return success response
+      return res.status(200).json({
+        status: 'success',
+        message: 'Payment phase updated successfully',
+        data: updatedPayment,
+        statusCode: 200
+      });
+
+    } catch (error) {
+      console.error('[Update Payment] Error:', error);
       return res.status(500).json({
         status: 'error',
         message: 'Internal server error: ' + error.message,
