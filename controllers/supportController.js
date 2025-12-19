@@ -6,6 +6,18 @@ import PartnerModel from '../models/PartnerModel.js';
 import Validators from '../utils/validators.js';
 import supabase from '../config/database.js';
 import path from 'path';
+import axios from 'axios';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+
+// AWS S3 Client
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION || 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
+});
 
 class SupportController {
   // GET /support/get_all_backlog_data?employee_id={employee_id}
@@ -1831,7 +1843,43 @@ class SupportController {
 
       console.log(`[View Document] Extracted storage path: ${storagePath}`);
 
-      // Step 5: Download file from storage - try multiple buckets
+      // Step 5: Check if file_path is a Supabase URL or S3 path
+      const isSupabaseUrl = document.file_path && document.file_path.includes('/storage/v1/object/public/');
+      const isS3Path = !isSupabaseUrl && storagePath && !storagePath.startsWith('http');
+
+      if (isS3Path) {
+        // File is stored in S3 - generate presigned URL
+        console.log('[View Document] Detected S3 path, generating presigned URL');
+        
+        try {
+          const command = new GetObjectCommand({
+            Bucket: bucketName,
+            Key: storagePath
+          });
+          
+          const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
+          
+          return res.status(200).json([{
+            success: true,
+            url: presignedUrl,
+            document_id: document.document_id,
+            file_path: storagePath,
+            expires_in: 3600,
+            statusCode: 200
+          }]);
+        } catch (s3Error) {
+          console.error('[View Document] S3 presigned URL error:', s3Error.message);
+          return res.status(500).json({
+            status: 'error',
+            message: `Failed to generate S3 view URL: ${s3Error.message}`,
+            statusCode: 500
+          });
+        }
+      }
+
+      // File is in Supabase Storage - download from storage
+      console.log('[View Document] Detected Supabase Storage URL, downloading from storage');
+      
       const bucketVariations = [
         bucketName, // expc-{case_type_name}
         'case-documents', // Fallback bucket
@@ -2354,6 +2402,7 @@ class SupportController {
         case_description,
         service_amount,
         claims_amount,
+        claim_amount, // Support both field names
         due_date,
         partner_id,
         case_type,
@@ -2361,7 +2410,8 @@ class SupportController {
         priority,
         ticket_stage,
         reviewer,
-        stakeholder
+        stakeholder,
+        payments // Add payments array support
       } = req.body;
 
       // Handle "changed reason" field (has space in name)
@@ -2430,8 +2480,10 @@ class SupportController {
         updateData.service_amount = String(service_amount);
       }
 
-      if (claims_amount !== undefined) {
-        updateData.claim_amount = claims_amount ? String(claims_amount) : null;
+      // Handle both claims_amount and claim_amount field names
+      const claimAmountValue = claims_amount !== undefined ? claims_amount : claim_amount;
+      if (claimAmountValue !== undefined) {
+        updateData.claim_amount = claimAmountValue !== null && claimAmountValue !== '' ? String(claimAmountValue) : null;
       }
 
       if (due_date !== undefined && due_date !== null) {
@@ -2593,7 +2645,128 @@ class SupportController {
         }
       }
 
-      // Step 8: Return success response
+      // Step 8: Handle payment phases update/creation
+      if (payments && Array.isArray(payments) && payments.length > 0) {
+        console.log(`[Update Task] Processing ${payments.length} payment phase(s)`);
+        
+        for (const payment of payments) {
+          try {
+            // Check if payment phase exists (by case_id and phase_name, or by case_phase_id if provided)
+            let existingPayment = null;
+            
+            if (payment.case_phase_id) {
+              // Update existing payment phase by ID
+              const { data: existingPaymentData, error: paymentSearchError } = await supabase
+                .from('case_payment_phases')
+                .select('*')
+                .eq('case_phase_id', parseInt(payment.case_phase_id))
+                .eq('case_id', fullCaseId)
+                .maybeSingle();
+              
+              if (!paymentSearchError && existingPaymentData) {
+                existingPayment = existingPaymentData;
+              }
+            } else {
+              // Try to find by phase_name
+              const { data: existingPaymentData, error: paymentSearchError } = await supabase
+                .from('case_payment_phases')
+                .select('*')
+                .eq('case_id', fullCaseId)
+                .eq('phase_name', payment.phase_name || '')
+                .maybeSingle();
+              
+              if (!paymentSearchError && existingPaymentData) {
+                existingPayment = existingPaymentData;
+              }
+            }
+
+            const paymentUpdateData = {
+              case_id: fullCaseId,
+              phase_name: payment.phase_name || null,
+              case_type_id: case_type ? parseInt(case_type) : existingCase.case_type_id || null,
+              phase_amount: payment.phase_amount !== undefined && payment.phase_amount !== null ? parseInt(payment.phase_amount) : null,
+              due_date: payment.due_date || null,
+              status: payment.status || 'pending',
+              updated_time: new Date().toISOString()
+            };
+
+            // Add optional fields
+            if (payment.paid_amount !== undefined) {
+              paymentUpdateData.paid_amount = payment.paid_amount ? parseInt(payment.paid_amount) : null;
+            }
+            if (payment.payment_date !== undefined) {
+              paymentUpdateData.payment_date = payment.payment_date || null;
+            }
+            if (payment.payment_method !== undefined) {
+              paymentUpdateData.payment_method = payment.payment_method || null;
+            }
+            if (payment.transaction_reference !== undefined) {
+              paymentUpdateData.transaction_reference = payment.transaction_reference || null;
+            }
+            if (payment.invoice_number !== undefined) {
+              paymentUpdateData.invoice_number = payment.invoice_number || null;
+            }
+            if (payment.notes !== undefined) {
+              paymentUpdateData.notes = payment.notes || null;
+            }
+
+            if (payment.updated_by !== undefined && payment.updated_by !== null) {
+              paymentUpdateData.updated_by = parseInt(payment.updated_by);
+            } else if (userId) {
+              paymentUpdateData.updated_by = userId;
+            }
+
+            if (existingPayment && existingPayment.case_phase_id) {
+              // Update existing payment phase
+              const { error: updatePaymentError } = await supabase
+                .from('case_payment_phases')
+                .update(paymentUpdateData)
+                .eq('case_phase_id', existingPayment.case_phase_id);
+
+              if (updatePaymentError) {
+                console.error('[Update Task] Error updating payment phase:', updatePaymentError);
+                console.error('[Update Task] Payment data:', JSON.stringify(paymentUpdateData, null, 2));
+              } else {
+                console.log(`[Update Task] Updated payment phase: ${existingPayment.case_phase_id}`);
+              }
+            } else {
+              // Create new payment phase
+              // Get next case_phase_id
+              const { data: maxPhase } = await supabase
+                .from('case_payment_phases')
+                .select('case_phase_id')
+                .order('case_phase_id', { ascending: false })
+                .limit(1)
+                .maybeSingle();
+
+              const nextPhaseId = (maxPhase?.case_phase_id || 0) + 1;
+
+              const newPaymentData = {
+                case_phase_id: nextPhaseId,
+                ...paymentUpdateData,
+                created_by: payment.created_by ? parseInt(payment.created_by) : (userId || null),
+                created_time: new Date().toISOString()
+              };
+
+              const { error: insertPaymentError } = await supabase
+                .from('case_payment_phases')
+                .insert([newPaymentData]);
+
+              if (insertPaymentError) {
+                console.error('[Update Task] Error creating payment phase:', insertPaymentError);
+                console.error('[Update Task] Payment data:', JSON.stringify(newPaymentData, null, 2));
+              } else {
+                console.log(`[Update Task] Created new payment phase: ${nextPhaseId}`);
+              }
+            }
+          } catch (paymentErr) {
+            console.error('[Update Task] Exception processing payment:', paymentErr);
+            // Continue with next payment
+          }
+        }
+      }
+
+      // Step 9: Return success response
       return res.status(200).json({
         status: 'success',
         message: 'Task updated successfully',

@@ -449,11 +449,42 @@ class PartnerController {
         case_value,
         service_amount,
         claim_amount,
+        claims_amount, // Support both claim_amount and claims_amount
         updatedby_name,
         createdby_name
       } = req.body;
 
-      const userId = req.user?.user_id;
+      // Get userId from req.user (if auth middleware is active) or extract from JWT token
+      let userId = req.user?.user_id;
+      
+      // If userId is not available, try to extract from JWT token in Authorization header
+      if (!userId) {
+        try {
+          const authHeader = req.headers['authorization'] || req.headers['Authorization'];
+          if (authHeader && authHeader.startsWith('Bearer ')) {
+            const jwtToken = authHeader.substring(7);
+            // Decode JWT token to get user_id (without verification for now)
+            const tokenParts = jwtToken.split('.');
+            if (tokenParts.length === 3) {
+              // Decode base64url (JWT uses base64url encoding, not standard base64)
+              const base64 = tokenParts[1].replace(/-/g, '+').replace(/_/g, '/');
+              const payload = JSON.parse(Buffer.from(base64, 'base64').toString());
+              userId = payload.user_id || payload.userId || null;
+              console.log('[Partner] Extracted userId from JWT token:', userId);
+            }
+          }
+        } catch (jwtError) {
+          console.warn('[Partner] Could not extract userId from JWT token:', jwtError.message);
+        }
+      }
+      
+      // Fallback: Try to get userId from request body if available
+      if (!userId && req.body.created_by) {
+        userId = parseInt(req.body.created_by);
+        console.log('[Partner] Using userId from request body created_by:', userId);
+      }
+      
+      console.log('[Partner] createTask - final userId:', userId);
       
       // Use referring_partner_id from payload, or fallback to partner_id, or get from user
       let partnerId = null;
@@ -507,6 +538,10 @@ class PartnerController {
             source: customer.source || null,
             language_preference: customer.languagePreference || null,
             notes: customer.notes || null,
+            gstin: customer.gstin || null,
+            pan: customer.pan || null,
+            state: customer.state || null,
+            pincode: customer.pincode || null,
             partner_id: partnerId,
             updated_by: userId,
             updated_time: new Date().toISOString()
@@ -533,7 +568,20 @@ class PartnerController {
           if (existingCustomer) {
             customerId = existingCustomer.customer_id;
           } else {
+            // Get next customer_id by finding max and incrementing
+            const { data: maxCustomers, error: maxCustomerError } = await supabase
+              .from('customers')
+              .select('customer_id')
+              .order('customer_id', { ascending: false })
+              .limit(1);
+
+            let nextCustomerId = 1;
+            if (!maxCustomerError && maxCustomers && maxCustomers.length > 0 && maxCustomers[0].customer_id) {
+              nextCustomerId = parseInt(maxCustomers[0].customer_id) + 1;
+            }
+
             const { data: newCustomer, error: customerError } = await CustomerModel.create({
+              customer_id: nextCustomerId,
               first_name: customer.firstName,
               last_name: customer.lastName,
               email_address: customer.email || null,
@@ -547,6 +595,10 @@ class PartnerController {
               source: customer.source || null,
               language_preference: customer.languagePreference || null,
               notes: customer.notes || null,
+              gstin: customer.gstin || null,
+              pan: customer.pan || null,
+              state: customer.state || null,
+              pincode: customer.pincode || null,
               partner_id: partnerId,
               created_by: userId,
               created_time: new Date().toISOString(),
@@ -567,7 +619,8 @@ class PartnerController {
       // Parse amounts
       const parsedCaseValue = case_value ? parseInt(case_value) : null;
       const parsedServiceAmount = service_amount ? String(service_amount) : null;
-      const parsedClaimAmount = claim_amount ? String(claim_amount) : null;
+      // Support both claim_amount and claims_amount field names
+      const parsedClaimAmount = (claim_amount || claims_amount) ? String(claim_amount || claims_amount) : null;
 
       // Create case
       const caseData = {
@@ -635,45 +688,161 @@ class PartnerController {
 
       // Create stakeholders
       if (stakeholders && Array.isArray(stakeholders) && stakeholders.length > 0) {
-        const stakeholdersData = stakeholders.map(stakeholder => ({
+        // Get next stakeholder_id by finding max and incrementing
+        const { data: maxStakeholders, error: maxStakeholderError } = await supabase
+          .from('case_stakeholders')
+          .select('stakeholder_id')
+          .order('stakeholder_id', { ascending: false })
+          .limit(1);
+
+        let nextStakeholderId = 1;
+        if (!maxStakeholderError && maxStakeholders && maxStakeholders.length > 0 && maxStakeholders[0].stakeholder_id) {
+          nextStakeholderId = parseInt(maxStakeholders[0].stakeholder_id) + 1;
+        }
+
+        const stakeholdersData = stakeholders.map((stakeholder, index) => ({
+          stakeholder_id: nextStakeholderId + index, // Generate unique IDs for each stakeholder
           case_id: caseId,
           stakeholder_name: stakeholder.name || stakeholder.stakeholder_name,
-          contact_email: stakeholder.email || stakeholder.contact_email,
-          contact_phone: stakeholder.phone || stakeholder.contact_phone,
+          contact_email: stakeholder.email || stakeholder.contactEmail || stakeholder.contact_email,
+          contact_phone: stakeholder.phone || stakeholder.contact_phone ? parseInt(stakeholder.phone || stakeholder.contact_phone) : null,
           role: stakeholder.role || null,
           notes: stakeholder.notes || null,
           created_by: userId,
           created_time: new Date().toISOString()
         }));
 
-        await StakeholderModel.createMultiple(stakeholdersData);
+        const { data: createdStakeholders, error: stakeholderError } = await StakeholderModel.createMultiple(stakeholdersData);
+        
+        if (stakeholderError) {
+          console.error('[Partner] Error creating stakeholders:', stakeholderError);
+          console.error('[Partner] Stakeholder data:', JSON.stringify(stakeholdersData, null, 2));
+          // Don't fail the entire request if stakeholder creation fails
+        } else {
+          console.log('[Partner] Stakeholders created successfully:', createdStakeholders?.length || 0);
+        }
       }
 
       // Create comment
-      if (comments) {
-        await CommentModel.create({
-          case_id: caseId,
-          user_id: userId,
-          comment_text: comments,
-          is_internal: internal === 'true' || internal === true,
-          created_time: new Date().toISOString()
-        });
+      console.log('[Partner] Comment check - comments:', comments, 'type:', typeof comments, 'trimmed:', comments ? comments.trim() : 'N/A');
+      if (comments && typeof comments === 'string' && comments.trim() !== '') {
+        console.log('[Partner] Creating comment for case_id:', caseId, 'userId:', userId);
+        try {
+          // Get next comment_id by finding max and incrementing
+          const { data: maxComments, error: maxCommentError } = await supabase
+            .from('case_comments')
+            .select('comment_id')
+            .order('comment_id', { ascending: false })
+            .limit(1);
+
+          let nextCommentId = 1;
+          if (!maxCommentError && maxComments && maxComments.length > 0 && maxComments[0].comment_id) {
+            nextCommentId = parseInt(maxComments[0].comment_id) + 1;
+          }
+          console.log('[Partner] Next comment_id:', nextCommentId);
+
+          const commentData = {
+            comment_id: nextCommentId,
+            case_id: caseId,
+            user_id: userId || null, // Allow null if userId is not available
+            comment_text: comments.trim(),
+            is_internal: internal === 'true' || internal === true,
+            created_time: new Date().toISOString()
+          };
+
+          console.log('[Partner] Inserting comment with data:', JSON.stringify(commentData, null, 2));
+          const { data: createdComment, error: commentError } = await CommentModel.create(commentData);
+
+          if (commentError) {
+            console.error('[Partner] Error creating comment:', commentError);
+            console.error('[Partner] Comment error details:', JSON.stringify(commentError, null, 2));
+            console.error('[Partner] Comment data that failed:', JSON.stringify(commentData, null, 2));
+            // Don't fail the entire request if comment creation fails, just log it
+          } else {
+            console.log('[Partner] Comment created successfully:', createdComment?.comment_id);
+            console.log('[Partner] Created comment:', JSON.stringify(createdComment, null, 2));
+          }
+        } catch (commentErr) {
+          console.error('[Partner] Exception while creating comment:', commentErr);
+          console.error('[Partner] Exception stack:', commentErr.stack);
+          // Don't fail the entire request if comment creation fails
+        }
+      } else {
+        console.log('[Partner] Comment not created - condition failed. comments:', comments, 'isString:', typeof comments === 'string', 'trimmedLength:', comments && typeof comments === 'string' ? comments.trim().length : 0);
       }
 
       // Create payment phases
       if (payments && Array.isArray(payments) && payments.length > 0) {
-        const paymentsData = payments.map(payment => ({
+        // Get next case_phase_id by finding max and incrementing
+        const { data: maxPhases, error: maxPhaseError } = await supabase
+          .from('case_payment_phases')
+          .select('case_phase_id')
+          .order('case_phase_id', { ascending: false })
+          .limit(1);
+
+        let nextPhaseId = 1;
+        if (!maxPhaseError && maxPhases && maxPhases.length > 0 && maxPhases[0].case_phase_id) {
+          nextPhaseId = parseInt(maxPhases[0].case_phase_id) + 1;
+        }
+
+        const paymentsData = payments.map((payment, index) => ({
+          case_phase_id: nextPhaseId + index, // Generate unique IDs for each payment phase
           case_id: caseId,
           phase_name: payment.phase_name || payment.name,
           case_type_id: caseTypeId,
-          phase_amount: payment.amount ? parseInt(payment.amount) : null,
+          phase_amount: payment.phase_amount ? parseInt(payment.phase_amount) : (payment.amount ? parseInt(payment.amount) : null),
           due_date: payment.due_date || payment.dueDate,
           status: payment.status || 'pending',
           created_by: userId,
           created_time: new Date().toISOString()
         }));
 
-        await PaymentModel.createMultiple(paymentsData);
+        const { data: createdPayments, error: paymentError } = await PaymentModel.createMultiple(paymentsData);
+        
+        if (paymentError) {
+          console.error('[Partner] Error creating payment phases:', paymentError);
+          console.error('[Partner] Payment data:', JSON.stringify(paymentsData, null, 2));
+          // Don't fail the entire request if payment creation fails
+        } else {
+          console.log('[Partner] Payment phases created successfully:', createdPayments?.length || 0);
+        }
+      }
+
+      // Create initial case_stage_history entry
+      if (ticket_Stage) {
+        // Get next stage_history_id by finding max and incrementing
+        const { data: maxHistory, error: maxHistoryError } = await supabase
+          .from('case_stage_history')
+          .select('stage_history_id')
+          .order('stage_history_id', { ascending: false })
+          .limit(1);
+
+        let nextHistoryId = 1;
+        if (!maxHistoryError && maxHistory && maxHistory.length > 0 && maxHistory[0].stage_history_id) {
+          nextHistoryId = parseInt(maxHistory[0].stage_history_id) + 1;
+        }
+
+        const stageHistoryData = {
+          stage_history_id: nextHistoryId,
+          case_id: caseId,
+          previous_stage: null, // No previous stage for initial entry
+          new_stage: ticket_Stage,
+          changed_by: userId,
+          changed_to: assignedTo ? parseInt(assignedTo) : null,
+          changed_reason: 'Case created',
+          created_by: userId,
+          created_time: new Date().toISOString(),
+          deleted_flag: false
+        };
+
+        const { error: historyError } = await supabase
+          .from('case_stage_history')
+          .insert([stageHistoryData]);
+
+        if (historyError) {
+          console.error('[Partner] Error creating stage history:', historyError);
+          // Don't fail the entire request if stage history creation fails
+        }
       }
 
       // Return response in the expected format
