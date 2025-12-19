@@ -30,6 +30,50 @@ class CustomerModel {
     return { data, error };
   }
 
+  // Find customer by mobile number
+  static async findByMobileNumber(mobileNumber) {
+    // Clean mobile number (remove +91, spaces, etc.)
+    let cleanMobile = mobileNumber.replace(/[^\d]/g, '');
+    
+    // Remove +91 prefix if present
+    if (cleanMobile.startsWith('91') && cleanMobile.length === 12) {
+      cleanMobile = cleanMobile.substring(2);
+    }
+    
+    const { data, error } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('mobile_number', cleanMobile)
+      .eq('deleted_flag', false)
+      .maybeSingle();
+
+    return { data, error };
+  }
+
+  // Find customer by customer_id
+  static async findByCustomerId(customerId) {
+    const { data, error } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('customer_id', customerId)
+      .eq('deleted_flag', false)
+      .maybeSingle();
+
+    return { data, error };
+  }
+
+  // Find customer by user_id
+  static async findByUserId(userId) {
+    const { data, error } = await supabase
+      .from('customers')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('deleted_flag', false)
+      .maybeSingle();
+
+    return { data, error };
+  }
+
   // Update customer
   static async update(customerId, updateData) {
     const { data, error } = await supabase
