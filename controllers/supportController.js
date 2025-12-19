@@ -1268,170 +1268,216 @@ class SupportController {
   // View partner document - simple version
   static async partnerDocumentView(req, res) {
     try {
+      // apikey, authorization, jwt_token, and session_id validation commented out
+      // const { jwt_token, session_id, apikey } = req.headers;
       const { document_id } = req.body;
+
+      // Validate required fields
+      // apikey, jwt_token, and session_id validation commented out
+      // if (!jwt_token || !session_id || !apikey) {
+      //   return res.status(401).json({
+      //     success: false,
+      //     error: 'Missing authentication headers'
+      //   });
+      // }
 
       if (!document_id) {
         return res.status(400).json({
           success: false,
-          error: 'document_id is required'
+          error: 'Missing document_id in request body'
         });
       }
 
-      console.log(`[View Document] Fetching document_id: ${document_id}`);
+      // Step 1: Validate session - commented out
+      // const session = await validateSession(session_id, jwt_token);
+      // 
+      // if (!session.valid) {
+      //   return res.status(401).json({
+      //     success: false,
+      //     error: 'Invalid session. Please login again.'
+      //   });
+      // }
 
-      // Step 1: Get document from database
-      const { data: document, error: docError } = await supabase
-        .from('backlog_documents')
-        .select('document_id, backlog_id, file_path')
-        .eq('document_id', document_id)
-        .maybeSingle();
+      // Additional validation: Check if apikey matches - commented out
+      // if (apikey !== SUPABASE_KEY) {
+      //   return res.status(401).json({
+      //     success: false,
+      //     error: 'Invalid API key'
+      //   });
+      // }
 
-      if (docError || !document) {
-        console.error('[View Document] Document not found:', docError);
+      // Step 2: Get backlog document details using Supabase REST API
+      const SUPABASE_URL = process.env.SUPABASE_URL || 'https://wrbnlvgecznyqelryjeq.supabase.co';
+      const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+      
+      const supabaseHeaders = {
+        'apikey': SUPABASE_KEY,
+        'Authorization': `Bearer ${SUPABASE_KEY}`,
+        // Schema name 'expc' usage commented out
+        // 'Accept-Profile': 'expc',
+        // 'Content-Profile': 'expc'
+      };
+
+      let documentDetails;
+      try {
+        const response = await axios.get(
+          `${SUPABASE_URL}/rest/v1/backlog_documents`,
+          {
+            params: {
+              document_id: `eq.${document_id}`,
+              deleted_flag: 'is.false',
+              select: 'document_id,backlog_id,file_path'
+            },
+            headers: supabaseHeaders
+          }
+        );
+        if (response.data && response.data.length > 0) {
+          documentDetails = response.data[0];
+        } else {
+          return res.status(404).json({
+            success: false,
+            error: 'Document not found'
+          });
+        }
+      } catch (error) {
+        console.error('Get backlog document details error:', error.message);
         return res.status(404).json({
           success: false,
           error: 'Document not found'
         });
       }
 
-      console.log(`[View Document] Found document: file_path=${document.file_path}`);
-
-      // Step 2: Get backlog to find case_type_name
-      const { data: backlog, error: backlogError } = await supabase
-        .from('backlog')
-        .select('case_type_id')
-        .eq('backlog_id', document.backlog_id)
-        .maybeSingle();
-
-      if (backlogError || !backlog) {
+      // Step 3: Get backlog details
+      let backlogDetails;
+      try {
+        const response = await axios.get(
+          `${SUPABASE_URL}/rest/v1/backlog`,
+          {
+            params: {
+              backlog_id: `eq.${documentDetails.backlog_id}`,
+              select: 'backlog_id,case_type_id'
+            },
+            headers: supabaseHeaders
+          }
+        );
+        if (response.data && response.data.length > 0) {
+          backlogDetails = response.data[0];
+        } else {
+          return res.status(404).json({
+            success: false,
+            error: 'Backlog details not found'
+          });
+        }
+      } catch (error) {
+        console.error('Get backlog details error:', error.message);
         return res.status(404).json({
           success: false,
-          error: 'Backlog not found'
+          error: 'Backlog details not found'
         });
       }
 
-      // Step 3: Get case_type_name
-      const { data: caseType, error: caseError } = await supabase
-        .from('case_types')
-        .select('case_type_name')
-        .eq('case_type_id', backlog.case_type_id)
-        .maybeSingle();
+      if (!backlogDetails || !backlogDetails.case_type_id) {
+        return res.status(404).json({
+          success: false,
+          error: 'Backlog details not found'
+        });
+      }
 
-      if (caseError || !caseType) {
+      // Step 4: Get case type name
+      let caseType;
+      try {
+        const response = await axios.get(
+          `${SUPABASE_URL}/rest/v1/case_types`,
+          {
+            params: {
+              case_type_id: `eq.${backlogDetails.case_type_id}`,
+              select: 'case_type_name'
+            },
+            headers: supabaseHeaders
+          }
+        );
+        if (response.data && response.data.length > 0) {
+          caseType = response.data[0];
+        } else {
+          return res.status(404).json({
+            success: false,
+            error: 'Case type not found'
+          });
+        }
+      } catch (error) {
+        console.error('Get case type error:', error.message);
         return res.status(404).json({
           success: false,
           error: 'Case type not found'
         });
       }
 
-      // Step 4: Construct bucket name
-      const bucketName = `expc-${caseType.case_type_name.trim().toLowerCase().replace(/\s+/g, '-')}`;
-      console.log(`[View Document] Using bucket: ${bucketName}`);
-
-      // Step 5: Extract file path
-      let storagePath = document.file_path;
-      
-      console.log(`[View Document] Original file_path: ${storagePath}`);
-      
-      // If it's a full URL, extract just the path
-      if (storagePath && storagePath.includes('/storage/v1/object/public/')) {
-        const parts = storagePath.split('/storage/v1/object/public/');
-        if (parts.length > 1) {
-          const pathParts = parts[1].split('/');
-          // Remove bucket name (first part) and keep the rest
-          if (pathParts.length > 1) {
-            storagePath = pathParts.slice(1).join('/');
-          } else {
-            storagePath = parts[1];
-          }
-        }
-      } else if (storagePath && storagePath.startsWith('bk-')) {
-        // Already in correct format: bk-ECSI-GA-25-086/filename.pdf
-        storagePath = storagePath;
-      } else if (storagePath && storagePath.includes(bucketName + '/')) {
-        // If path contains bucket name, remove it
-        storagePath = storagePath.split(bucketName + '/')[1] || storagePath;
-      }
-
-      console.log(`[View Document] Extracted storage path: ${storagePath}`);
-
-      // Step 6: Download file from storage - try multiple buckets
-      const bucketVariations = [
-        bucketName, // expc-{case_type_name}
-        `public-${caseType.case_type_name.trim().toLowerCase().replace(/\s+/g, '-')}`, // public-{case_type_name}
-        'backlog-documents', // Fallback bucket
-        'public-fire' // Common bucket
-      ];
-
-      let fileData = null;
-      let downloadError = null;
-      let usedBucket = null;
-
-      for (const bucket of bucketVariations) {
-        console.log(`[View Document] Trying bucket: ${bucket}`);
-        const { data, error } = await supabase.storage
-          .from(bucket)
-          .download(storagePath);
-
-        if (!error && data) {
-          fileData = data;
-          usedBucket = bucket;
-          console.log(`[View Document] ✓ File found in bucket: ${bucket}`);
-          break;
-        } else {
-          console.log(`[View Document] ✗ Not found in bucket: ${bucket}, error: ${error?.message}`);
-          downloadError = error;
-        }
-      }
-
-      if (!fileData) {
-        console.error('[View Document] File not found in any bucket');
-        console.error('[View Document] Tried buckets:', bucketVariations);
-        console.error('[View Document] Storage path:', storagePath);
-        return res.status(500).json({
+      if (!caseType || !caseType.case_type_name) {
+        return res.status(404).json({
           success: false,
-          error: 'File not found in storage',
-          details: {
-            tried_buckets: bucketVariations,
-            storage_path: storagePath,
-            case_type_name: caseType.case_type_name
-          }
+          error: 'Case type not found'
         });
       }
 
-      // Step 7: Return file
-      const arrayBuffer = await fileData.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      const ext = path.extname(storagePath).toLowerCase();
+      // Step 5: Build bucket name
+      const caseTypeName = caseType.case_type_name;
+      const safeCaseType = caseTypeName
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '-');
+      const bucketName = `expc-${safeCaseType}`;
+
+      // Step 6: Download file from S3
+      let downloadResult;
+      try {
+        const command = new GetObjectCommand({
+          Bucket: bucketName,
+          Key: documentDetails.file_path
+        });
+        const response = await s3Client.send(command);
+        
+        // Convert stream to buffer
+        const chunks = [];
+        for await (const chunk of response.Body) {
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+        downloadResult = {
+          success: true,
+          buffer,
+          contentType: response.ContentType,
+          contentLength: response.ContentLength
+        };
+      } catch (error) {
+        console.error('S3 download error:', error.message);
+        downloadResult = {
+          success: false,
+          error: error.message
+        };
+      }
+
+      if (!downloadResult.success) {
+        return res.status(500).json({
+          success: false,
+          error: `Failed to download file: ${downloadResult.error}`
+        });
+      }
+
+      // Step 7: Return file as binary response (for viewing in browser)
+      const filename = documentDetails.file_path.split('/').pop();
       
-      // Determine Content-Type based on file extension
-      // Supported: PDF, DOC, DOCX, JPG, PNG, TXT
-      const contentTypeMap = {
-        '.pdf': 'application/pdf',
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.png': 'image/png',
-        '.gif': 'image/gif',
-        '.webp': 'image/webp',
-        '.doc': 'application/msword',
-        '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-        '.txt': 'text/plain',
-        '.xls': 'application/vnd.ms-excel',
-        '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      };
-      const contentType = contentTypeMap[ext] || 'application/octet-stream';
-
-      console.log(`[View Document] Returning file: ${buffer.length} bytes, type: ${contentType}, extension: ${ext}`);
-
-      res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `inline; filename="${path.basename(storagePath)}"`);
-      return res.send(buffer);
-
+      res.set({
+        'Content-Type': downloadResult.contentType || 'application/octet-stream',
+        'Content-Length': downloadResult.contentLength,
+        'Content-Disposition': `inline; filename="${filename}"`,
+        'Cache-Control': 'no-cache'
+      });
+      return res.status(200).send(downloadResult.buffer);
     } catch (error) {
-      console.error('[View Document] Error:', error);
+      console.error('Partner document view error:', error);
       return res.status(500).json({
         success: false,
-        error: 'Internal server error: ' + error.message
+        error: error.message
       });
     }
   }
