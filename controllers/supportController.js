@@ -1272,8 +1272,10 @@ class SupportController {
 
       if (!document_id) {
         return res.status(400).json({
-          success: false,
-          error: 'document_id is required'
+          status: 'error',
+          message: 'document_id is required',
+          error_code: 'MISSING_DOCUMENT_ID',
+          statusCode: 400
         });
       }
 
@@ -1289,8 +1291,10 @@ class SupportController {
       if (docError || !document) {
         console.error('[View Document] Document not found:', docError);
         return res.status(404).json({
-          success: false,
-          error: 'Document not found'
+          status: 'error',
+          message: 'Document not found',
+          error_code: 'DOCUMENT_NOT_FOUND',
+          statusCode: 404
         });
       }
 
@@ -1305,8 +1309,10 @@ class SupportController {
 
       if (backlogError || !backlog) {
         return res.status(404).json({
-          success: false,
-          error: 'Backlog not found'
+          status: 'error',
+          message: 'Backlog not found',
+          error_code: 'BACKLOG_NOT_FOUND',
+          statusCode: 404
         });
       }
 
@@ -1319,8 +1325,10 @@ class SupportController {
 
       if (caseError || !caseType) {
         return res.status(404).json({
-          success: false,
-          error: 'Case type not found'
+          status: 'error',
+          message: 'Case type not found',
+          error_code: 'CASE_TYPE_NOT_FOUND',
+          statusCode: 404
         });
       }
 
@@ -1388,9 +1396,11 @@ class SupportController {
         console.error('[View Document] File not found in any bucket');
         console.error('[View Document] Tried buckets:', bucketVariations);
         console.error('[View Document] Storage path:', storagePath);
-        return res.status(500).json({
-          success: false,
-          error: 'File not found in storage',
+        return res.status(404).json({
+          status: 'error',
+          message: 'File not found in storage',
+          error_code: 'FILE_NOT_FOUND',
+          statusCode: 404,
           details: {
             tried_buckets: bucketVariations,
             storage_path: storagePath,
@@ -1405,7 +1415,7 @@ class SupportController {
       const ext = path.extname(storagePath).toLowerCase();
       
       // Determine Content-Type based on file extension
-      // Supported: PDF, DOC, DOCX, JPG, PNG, TXT
+      // Supported: PDF, DOC, DOCX, JPG, PNG, GIF, WEBP, SVG, TXT
       const contentTypeMap = {
         '.pdf': 'application/pdf',
         '.jpg': 'image/jpeg',
@@ -1413,6 +1423,7 @@ class SupportController {
         '.png': 'image/png',
         '.gif': 'image/gif',
         '.webp': 'image/webp',
+        '.svg': 'image/svg+xml',
         '.doc': 'application/msword',
         '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         '.txt': 'text/plain',
@@ -1423,15 +1434,21 @@ class SupportController {
 
       console.log(`[View Document] Returning file: ${buffer.length} bytes, type: ${contentType}, extension: ${ext}`);
 
+      // Set headers for proper binary response
       res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Length', buffer.length);
       res.setHeader('Content-Disposition', `inline; filename="${path.basename(storagePath)}"`);
+      
+      // Return binary data (RECOMMENDED format per spec)
       return res.send(buffer);
 
     } catch (error) {
       console.error('[View Document] Error:', error);
       return res.status(500).json({
-        success: false,
-        error: 'Internal server error: ' + error.message
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        error_code: 'INTERNAL_ERROR',
+        statusCode: 500
       });
     }
   }
@@ -1767,6 +1784,7 @@ class SupportController {
         return res.status(400).json({
           status: 'error',
           message: 'document_id is required in request body',
+          error_code: 'MISSING_DOCUMENT_ID',
           statusCode: 400
         });
       }
@@ -1859,19 +1877,24 @@ class SupportController {
           
           const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
           
-          return res.status(200).json([{
+          // Return JSON response with URL for frontend to use
+          return res.status(200).json({
             success: true,
             url: presignedUrl,
+            document_url: presignedUrl, // Alternative field name
+            image_url: presignedUrl, // Alternative field name
+            file_url: presignedUrl, // Alternative field name
             document_id: document.document_id,
             file_path: storagePath,
             expires_in: 3600,
             statusCode: 200
-          }]);
+          });
         } catch (s3Error) {
           console.error('[View Document] S3 presigned URL error:', s3Error.message);
           return res.status(500).json({
             status: 'error',
             message: `Failed to generate S3 view URL: ${s3Error.message}`,
+            error_code: 'S3_URL_GENERATION_ERROR',
             statusCode: 500
           });
         }
@@ -1912,14 +1935,14 @@ class SupportController {
         console.error('[View Document] File not found in any bucket');
         console.error('[View Document] Tried buckets:', bucketVariations);
         console.error('[View Document] Storage path:', storagePath);
-        return res.status(500).json({
+        return res.status(404).json({
           status: 'error',
           message: 'File not found in storage',
           details: {
             tried_buckets: bucketVariations,
             storage_path: storagePath
           },
-          statusCode: 500
+          statusCode: 404
         });
       }
 
@@ -1955,6 +1978,7 @@ class SupportController {
       return res.status(500).json({
         status: 'error',
         message: 'Internal server error: ' + error.message,
+        error_code: 'INTERNAL_ERROR',
         statusCode: 500
       });
     }
