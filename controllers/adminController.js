@@ -1623,12 +1623,14 @@ class AdminController {
       const employeeIds = [...new Set((leaveApplications || []).map(la => la.employee_id).filter(Boolean))];
       const leaveTypeIds = [...new Set((leaveApplications || []).map(la => la.leave_type_id).filter(Boolean))];
 
-      // Fetch employees data
+      // Fetch employees data with user info for designation, email, and mobile
       let employeesMap = {};
+      let designationsMap = {};
+      let employeeEmailsMap = {};
       if (employeeIds.length > 0) {
         const { data: employees, error: employeesError } = await supabase
           .from('employees')
-          .select('employee_id, first_name, last_name')
+          .select('employee_id, first_name, last_name, user_id, department, mobile_number')
           .in('employee_id', employeeIds);
 
         if (!employeesError && employees) {
@@ -1636,6 +1638,28 @@ class AdminController {
             acc[emp.employee_id] = emp;
             return acc;
           }, {});
+
+          // Get user_ids for email and role lookup
+          const userIds = [...new Set(employees.map(emp => emp.user_id).filter(Boolean))];
+          
+          if (userIds.length > 0) {
+            const { data: users, error: usersError } = await supabase
+              .from('users')
+              .select('user_id, role, email')
+              .in('user_id', userIds);
+
+            if (!usersError && users) {
+              users.forEach(user => {
+                employees.forEach(emp => {
+                  if (emp.user_id === user.user_id) {
+                    // Use department from employees table, fallback to role from users table
+                    designationsMap[emp.employee_id] = emp.department || user.role || 'N/A';
+                    employeeEmailsMap[emp.employee_id] = user.email || 'N/A';
+                  }
+                });
+              });
+            }
+          }
         }
       }
 
@@ -1659,6 +1683,9 @@ class AdminController {
       const formattedLeaves = (leaveApplications || []).map(leave => {
         const employee = leave.employee_id ? employeesMap[leave.employee_id] : null;
         const leaveType = leave.leave_type_id ? leaveTypesMap[leave.leave_type_id] : null;
+        const designation = leave.employee_id ? (designationsMap[leave.employee_id] || 'N/A') : 'N/A';
+        const employeeEmail = leave.employee_id ? (employeeEmailsMap[leave.employee_id] || 'N/A') : 'N/A';
+        const contactNumber = employee?.mobile_number || null;
 
         return {
           application_id: leave.application_id,
@@ -1670,6 +1697,10 @@ class AdminController {
           reason: leave.reason,
           status: leave.status || 'pending',
           applied_date: leave.applied_date,
+          designation: designation,
+          employee_email: employeeEmail,
+          contact_number: contactNumber,
+          emergency_contact: leave.emergency_contact || null,
           employees: {
             employee_id: employee?.employee_id || null,
             first_name: employee?.first_name || '',
@@ -4168,12 +4199,14 @@ class AdminController {
       const employeeIds = [...new Set((leaveApplications || []).map(la => la.employee_id).filter(Boolean))];
       const leaveTypeIds = [...new Set((leaveApplications || []).map(la => la.leave_type_id).filter(Boolean))];
 
-      // Fetch employees data
+      // Fetch employees data with user info for designation, email, and mobile
       let employeesMap = {};
+      let designationsMap = {};
+      let employeeEmailsMap = {};
       if (employeeIds.length > 0) {
         const { data: employees, error: employeesError } = await supabase
           .from('employees')
-          .select('employee_id, first_name, last_name')
+          .select('employee_id, first_name, last_name, user_id, department, mobile_number')
           .in('employee_id', employeeIds);
 
         if (!employeesError && employees) {
@@ -4181,6 +4214,28 @@ class AdminController {
             acc[emp.employee_id] = emp;
             return acc;
           }, {});
+
+          // Get user_ids for email and role lookup
+          const userIds = [...new Set(employees.map(emp => emp.user_id).filter(Boolean))];
+          
+          if (userIds.length > 0) {
+            const { data: users, error: usersError } = await supabase
+              .from('users')
+              .select('user_id, role, email')
+              .in('user_id', userIds);
+
+            if (!usersError && users) {
+              users.forEach(user => {
+                employees.forEach(emp => {
+                  if (emp.user_id === user.user_id) {
+                    // Use department from employees table, fallback to role from users table
+                    designationsMap[emp.employee_id] = emp.department || user.role || 'N/A';
+                    employeeEmailsMap[emp.employee_id] = user.email || 'N/A';
+                  }
+                });
+              });
+            }
+          }
         }
       }
 
@@ -4204,6 +4259,9 @@ class AdminController {
       const formattedLeaves = (leaveApplications || []).map(leave => {
         const employee = leave.employee_id ? employeesMap[leave.employee_id] : null;
         const leaveType = leave.leave_type_id ? leaveTypesMap[leave.leave_type_id] : null;
+        const designation = leave.employee_id ? (designationsMap[leave.employee_id] || 'N/A') : 'N/A';
+        const employeeEmail = leave.employee_id ? (employeeEmailsMap[leave.employee_id] || 'N/A') : 'N/A';
+        const contactNumber = employee?.mobile_number || null;
 
         return {
           application_id: leave.application_id,
@@ -4215,6 +4273,10 @@ class AdminController {
           reason: leave.reason,
           status: leave.status || 'pending',
           applied_date: leave.applied_date,
+          designation: designation,
+          employee_email: employeeEmail,
+          contact_number: contactNumber,
+          emergency_contact: leave.emergency_contact || null,
           employees: {
             employee_id: employee?.employee_id || null,
             first_name: employee?.first_name || '',
