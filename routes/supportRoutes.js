@@ -1,5 +1,6 @@
 import express from 'express';
 import SupportController from '../controllers/supportController.js';
+import PartnerController from '../controllers/partnerController.js';
 import { uploadDataFile } from '../middleware/uploadMiddleware.js';
 import multer from 'multer';
 
@@ -69,6 +70,9 @@ router.post('/createcasepaymentphases', SupportController.createCasePaymentPhase
 
 // PATCH /webhook/updatepayment - Update a payment phase (webhook endpoint for n8n)
 router.patch('/updatepayment', SupportController.updatePayment);
+
+// POST /webhook/partner_creation - Create partner account (webhook endpoint for n8n)
+router.post('/partner_creation', PartnerController.createPartner);
 
 // GET /support/getuserdetails?email={email} - Get user details by email
 router.get('/getuserdetails', SupportController.getUserDetails);

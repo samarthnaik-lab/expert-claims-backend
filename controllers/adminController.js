@@ -315,7 +315,7 @@ class AdminController {
             username: user.username || '',
             email: user.email || '',
             role: user.role || '',
-            status: user.deleted_flag ? 'inactive' : 'active',
+            status: user.status || (user.deleted_flag ? 'inactive' : 'active'), // Use status field from DB, fallback to deleted_flag
             created_time: user.created_time || user.created_at || null,
             employees: employees,
             partners: partners,
@@ -485,7 +485,7 @@ class AdminController {
         username: user.username || '',
         email: user.email || '',
         role: user.role || '',
-        status: user.deleted_flag ? 'inactive' : 'active',
+        status: user.status || (user.deleted_flag ? 'inactive' : 'active'), // Use status field from DB, fallback to deleted_flag
         created_time: user.created_time || user.created_at || null,
         employees: employees,
         partners: partners,
@@ -1100,6 +1100,7 @@ class AdminController {
         password,
         username,
         role,
+        status,
         mobile_number,
         emergency_contact,
         gender,
@@ -1172,6 +1173,24 @@ class AdminController {
       if (username) userUpdateData.username = username;
       if (mobile_number !== undefined) userUpdateData.mobile_number = mobile_number || null;
       if (password && password !== '') userUpdateData.password_hash = password; // Only update if password provided
+      // Update status field - allow null, empty string, or valid enum values
+      if (status !== undefined) {
+        userUpdateData.status = (status === null || status === '') ? null : status;
+        console.log(`[Admin] Updating user status: ${status} -> ${userUpdateData.status} for user_id: ${user_id}`);
+        
+        // If status is "inactive" or "suspended", also set deleted_flag to true
+        const statusLower = (status || '').toLowerCase();
+        if (statusLower === 'inactive' || statusLower === 'suspended') {
+          userUpdateData.deleted_flag = true;
+          console.log(`[Admin] Setting deleted_flag to true for user_id: ${user_id} due to status: ${status}`);
+        } else if (statusLower === 'active') {
+          // If status is "active", set deleted_flag to false
+          userUpdateData.deleted_flag = false;
+          console.log(`[Admin] Setting deleted_flag to false for user_id: ${user_id} due to status: ${status}`);
+        }
+      }
+
+      console.log('[Admin] User update data:', JSON.stringify(userUpdateData, null, 2));
 
       const { error: userUpdateError } = await supabase
         .from('users')
@@ -1391,13 +1410,22 @@ class AdminController {
         }
       }
 
+      // Fetch updated user to return complete data including status
+      const { data: updatedUser, error: fetchError } = await supabase
+        .from('users')
+        .select('user_id, email, username, role, status, mobile_number, updated_time')
+        .eq('user_id', user_id)
+        .single();
+
       // Return success response
       return res.status(200).json([{
         status: 'success',
         message: 'User updated successfully',
         data: {
           user_id: user_id,
-          updated_time: now
+          updated_time: now,
+          status: updatedUser?.status || null,
+          ...(updatedUser || {})
         }
       }]);
 
