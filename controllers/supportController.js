@@ -2475,6 +2475,243 @@ class SupportController {
     }
   }
 
+  // POST /support/invoice
+  // Update invoice number for a payment phase (with duplicate check and auto-increment)
+  static async updateInvoice(req, res) {
+    try {
+      const { case_phase_id, invoice_number } = req.body;
+
+      // Validate required fields
+      if (!case_phase_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'case_phase_id is required',
+          statusCode: 400
+        });
+      }
+
+      let finalInvoiceNumber = invoice_number;
+
+      // If invoice_number is not provided, auto-generate it (+1 from highest)
+      if (!finalInvoiceNumber || finalInvoiceNumber.trim() === '') {
+        console.log(`[Support Team] Invoice number not provided, auto-generating for case_phase_id: ${case_phase_id}`);
+        
+        // Get the highest invoice number
+        const highestInvoice = await SupportController.getHighestInvoiceNumber();
+        
+        // Generate next invoice number (+1)
+        finalInvoiceNumber = SupportController.generateNextInvoiceNumber(highestInvoice);
+        
+        console.log(`[Support Team] Auto-generated invoice number: ${finalInvoiceNumber} (from highest: ${highestInvoice || 'none'})`);
+      }
+
+      console.log(`[Support Team] Updating invoice for case_phase_id: ${case_phase_id}, invoice_number: ${finalInvoiceNumber}`);
+
+      // Step 1: Check if invoice_number already exists for a different case_phase_id
+      const { data: existingInvoice, error: checkError } = await supabase
+        .from('case_payment_phases')
+        .select('case_phase_id, invoice_number')
+        .eq('invoice_number', finalInvoiceNumber)
+        .neq('case_phase_id', case_phase_id)
+        .limit(1)
+        .single();
+
+      if (checkError && checkError.code !== 'PGRST116') {
+        // PGRST116 is "not found" error, which is fine - means invoice doesn't exist
+        console.error('[Support Team] Error checking existing invoice:', checkError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to check existing invoice',
+          error: checkError.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      // If invoice_number exists for a different case_phase_id, return error
+      if (existingInvoice && existingInvoice.invoice_number === finalInvoiceNumber) {
+        console.log(`[Support Team] Invoice number ${finalInvoiceNumber} already exists for case_phase_id: ${existingInvoice.case_phase_id}`);
+        return res.status(409).json({
+          status: 'exist',
+          message: 'invoice already exist',
+          statusCode: 409
+        });
+      }
+
+      // Step 2: Verify the case_phase_id exists
+      const { data: existingPhase, error: phaseCheckError } = await supabase
+        .from('case_payment_phases')
+        .select('case_phase_id')
+        .eq('case_phase_id', case_phase_id)
+        .single();
+
+      if (phaseCheckError || !existingPhase) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Payment phase not found',
+          statusCode: 404
+        });
+      }
+
+      // Step 3: Update the invoice_number for the given case_phase_id
+      const { data: updatedPhase, error: updateError } = await supabase
+        .from('case_payment_phases')
+        .update({
+          invoice_number: finalInvoiceNumber,
+          updated_time: new Date().toISOString()
+        })
+        .eq('case_phase_id', case_phase_id)
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('[Support Team] Error updating invoice:', updateError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to update invoice',
+          error: updateError.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      if (!updatedPhase) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Payment phase not found',
+          statusCode: 404
+        });
+      }
+
+      console.log(`[Support Team] Invoice updated successfully for case_phase_id: ${case_phase_id} with invoice_number: ${finalInvoiceNumber}`);
+
+      // Return success response
+      return res.status(200).json({
+        message: 'Updated successfully ✅',
+        invoice_number: finalInvoiceNumber,
+        case_phase_id: case_phase_id,
+        statusCode: 200
+      });
+
+    } catch (error) {
+      console.error('[Support Team] Unexpected error in updateInvoice:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error',
+        error: error.message || 'Unknown error',
+        statusCode: 500
+      });
+    }
+  }
+
+  // Helper function to get the highest invoice number from all payment phases
+  // Returns highest "ECSI-25-XXXX" format invoice, or null if none found
+  static async getHighestInvoiceNumber() {
+    try {
+      // Fetch all payment phases with invoice numbers (non-null)
+      const { data: paymentPhases, error: fetchError } = await supabase
+        .from('case_payment_phases')
+        .select('invoice_number')
+        .not('invoice_number', 'is', null);
+
+      if (fetchError) {
+        console.error('[Support Team] Error fetching payment phases:', fetchError);
+        return null;
+      }
+
+      // Filter for ECSI-25-XXXX format invoices only
+      const ecsiInvoices = (paymentPhases || [])
+        .filter(item => {
+          if (!item.invoice_number || item.invoice_number.trim() === '') {
+            return false;
+          }
+          // Check if it matches ECSI-25-XXXX format
+          const pattern = /^ECSI-25-\d{4}$/;
+          return pattern.test(item.invoice_number.trim());
+        })
+        .sort((a, b) => {
+          try {
+            // Extract numeric part from invoice number (e.g., "ECSI-25-0080" -> 80)
+            const numA = parseInt(a.invoice_number.split('-').pop() || '0', 10);
+            const numB = parseInt(b.invoice_number.split('-').pop() || '0', 10);
+            return numB - numA; // Highest first (descending order)
+          } catch (error) {
+            // If parsing fails, maintain original order
+            return 0;
+          }
+        });
+
+      // Get the highest ECSI-25 invoice (first item after sorting)
+      return ecsiInvoices.length > 0 ? ecsiInvoices[0].invoice_number : null;
+    } catch (error) {
+      console.error('[Support Team] Error in getHighestInvoiceNumber:', error);
+      return null;
+    }
+  }
+
+  // Helper function to generate next invoice number (+1 from highest)
+  // Format: ECSI-25-XXXX (4-digit number with leading zeros)
+  // If highestInvoice is not in ECSI-25-XXXX format, uses "ECSI-25-0080" as base
+  static generateNextInvoiceNumber(highestInvoice) {
+    // If no ECSI-25-XXXX format invoice found, use "ECSI-25-0080" as base
+    if (!highestInvoice || !highestInvoice.startsWith('ECSI-25-')) {
+      // Start from 0080 if no valid ECSI-25 invoice found
+      return "ECSI-25-0080";
+    }
+
+    try {
+      // Extract number from invoice format "ECSI-25-0080" -> 80
+      const parts = highestInvoice.split('-');
+      if (parts.length >= 3 && parts[0] === 'ECSI' && parts[1] === '25') {
+        // Format: ECSI-25-0080
+        const lastPart = parts[parts.length - 1]; // "0080"
+        const num = parseInt(lastPart, 10);
+        
+        if (!isNaN(num)) {
+          const nextNum = num + 1;
+          // Format with 4-digit leading zeros (e.g., 0080, 0081, 0082, ...)
+          const paddedNum = nextNum.toString().padStart(4, '0');
+          return `ECSI-25-${paddedNum}`;
+        }
+      }
+      
+      // Fallback: if format is unexpected, use 0080 as base
+      return "ECSI-25-0080";
+    } catch (error) {
+      console.error('[Support Team] Error generating next invoice number:', error);
+      // Fallback: use 0080 as base
+      return "ECSI-25-0080";
+    }
+  }
+
+  // GET /support/invoice_get
+  // Get the highest invoice number from payment phases
+  // Returns "ECSI-25-0080" if no ECSI-25-XXXX format invoices found
+  static async getLatestInvoice(req, res) {
+    try {
+      console.log('[Support Team] Fetching highest invoice number');
+
+      const highestInvoice = await SupportController.getHighestInvoiceNumber();
+
+      // If no ECSI-25-XXXX format invoices found, return default "ECSI-25-0080"
+      const resultInvoice = highestInvoice || "ECSI-25-0080";
+
+      console.log(`[Support Team] Highest invoice found: ${resultInvoice} ${!highestInvoice ? '(default)' : ''}`);
+
+      return res.status(200).json({
+        latest_invoice: resultInvoice,
+        statusCode: 200
+      });
+
+    } catch (error) {
+      console.error('[Support Team] Unexpected error in getLatestInvoice:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error',
+        error: error.message || 'Unknown error',
+        statusCode: 500
+      });
+    }
+  }
+
   // PATCH /support/update_Task
   // Update a case/task with all related fields
   static async updateTask(req, res) {

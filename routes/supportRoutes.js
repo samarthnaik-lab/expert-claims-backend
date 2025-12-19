@@ -56,6 +56,12 @@ router.post('/upload', uploadDataFile, SupportController.uploadDocument);
 // POST /support/everything-cases - Get comprehensive case data with all related information
 router.post('/everything-cases', SupportController.getEverythingCases);
 
+// POST /support/invoice - Update invoice number for a payment phase (with duplicate check)
+router.post('/invoice', SupportController.updateInvoice);
+
+// GET /support/invoice_get - Get the latest invoice number from payment phases
+router.get('/invoice_get', SupportController.getLatestInvoice);
+
 // POST /support/view - View case document by document_id
 router.post('/view', SupportController.viewDocument);
 
