@@ -5,6 +5,7 @@ import axios from 'axios';
 import UserModel from '../models/UserModel.js';
 import SessionModel from '../models/SessionModel.js';
 import OTPModel from '../models/OTPModel.js';
+import CustomerModel from '../models/CustomerModel.js';
 
 class AuthService {
   
@@ -642,6 +643,237 @@ class AuthService {
 
   static getUserId(user) {
     return user.user_id || user.id || user.userId;
+  }
+
+  /**
+   * Check if customer exists by mobile number
+   * @param {string} phoneNumber - Phone number to check
+   * @returns {Promise<{exists: boolean, customer?: object, error?: string}>}
+   */
+  static async checkCustomerExists(phoneNumber) {
+    try {
+      console.log(`[Customer Login] Checking if customer exists with phone: ${phoneNumber}`);
+      
+      const { data: customer, error } = await CustomerModel.findByMobileNumber(phoneNumber);
+      
+      if (error) {
+        console.error(`[Customer Login] Error finding customer:`, error);
+        return { exists: false, customer: null, error: 'Database error occurred' };
+      }
+      
+      if (!customer) {
+        console.log(`[Customer Login] Customer not found with phone: ${phoneNumber}`);
+        return { exists: false, customer: null, error: null };
+      }
+      
+      console.log(`[Customer Login] Customer found:`, {
+        customer_id: customer.customer_id,
+        user_id: customer.user_id,
+        mobile_number: customer.mobile_number
+      });
+      
+      return { exists: true, customer, error: null };
+    } catch (error) {
+      console.error(`[Customer Login] Exception checking customer:`, error);
+      return { exists: false, customer: null, error: 'An error occurred while checking customer' };
+    }
+  }
+
+  /**
+   * Generate and save OTP for customer login
+   * @param {string} phoneNumber - Customer's phone number
+   * @returns {Promise<{success: boolean, requestId?: string, mobile?: string, expiresAt?: string, error?: string}>}
+   */
+  static async generateAndSaveOTPForCustomer(phoneNumber) {
+    try {
+      console.log(`[Customer Login] Generating OTP for customer phone: ${phoneNumber}`);
+      
+      // Find customer by phone number
+      const { data: customer, error: customerError } = await CustomerModel.findByMobileNumber(phoneNumber);
+      
+      if (customerError || !customer) {
+        console.error(`[Customer Login] Customer not found:`, customerError);
+        return { success: false, error: 'Customer not found' };
+      }
+      
+      if (!customer.user_id) {
+        console.error(`[Customer Login] Customer has no user_id:`, customer.customer_id);
+        return { success: false, error: 'Customer account is not properly linked' };
+      }
+      
+      // Store original mobile number (without +91 extension) for database
+      const originalMobileNumber = phoneNumber.replace(/[^\d]/g, '');
+      // Remove +91 prefix if present
+      let cleanMobile = originalMobileNumber;
+      if (cleanMobile.startsWith('91') && cleanMobile.length === 12) {
+        cleanMobile = cleanMobile.substring(2);
+      }
+      
+      // Format the mobile number for msg91 API (add +91 extension)
+      const formattedMobile = this.formatMobileNumber(cleanMobile);
+      
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
+      
+      console.log(`[Customer Login] Requesting OTP for customer ${customer.customer_id} (user_id: ${customer.user_id}) - Original: ${cleanMobile}, Formatted for msg91: ${formattedMobile}`);
+      
+      // Send OTP request via msg91 Widget API
+      const sendResult = await this.sendOTP(formattedMobile);
+      
+      if (!sendResult.success) {
+        console.error('[Customer Login] Failed to send OTP:', sendResult.error);
+        return { 
+          success: false, 
+          error: sendResult.error || 'Failed to send OTP. Please try again.' 
+        };
+      }
+      
+      // Prepare OTP metadata for database
+      const otpData = {
+        user_id: customer.user_id,
+        mobile_number: cleanMobile, // Store WITHOUT +91 extension
+        otp_code: null, // Widget API generates OTP - we don't receive it
+        purpose: 'login',
+        expires_at: expiresAt.toISOString(),
+        is_used: false,
+        attempts: '0',
+        max_attempts: 3,
+        created_by: customer.user_id.toString(),
+        created_time: new Date().toISOString(),
+        requestId: sendResult.requestId || null // requestId from sendOtp response
+      };
+      
+      // Save OTP metadata to database
+      console.log(`[Customer Login] Saving OTP metadata to database:`, {
+        requestId: sendResult.requestId,
+        mobile_number: formattedMobile,
+        user_id: customer.user_id,
+        fullOtpData: otpData
+      });
+      
+      const { data: otpRecord, error: otpError } = await OTPModel.create(otpData);
+      
+      if (otpError) {
+        console.error('[Customer Login] Failed to save OTP metadata:', otpError);
+        return { success: false, error: 'Failed to save OTP metadata: ' + (otpError.message || JSON.stringify(otpError)) };
+      }
+      
+      console.log(`[Customer Login] OTP request sent successfully. RequestId: ${sendResult.requestId}, OTP ID: ${otpRecord?.otp_id}`);
+      
+      return { 
+        success: true, 
+        otp: null, // Widget API generates OTP - we don't know it
+        mobile: cleanMobile, // Return original mobile (without extension) for display
+        contactType: 'mobile',
+        expiresAt: expiresAt.toISOString(),
+        requestId: sendResult.requestId
+      };
+    } catch (error) {
+      console.error('[Customer Login] Exception in generateAndSaveOTPForCustomer:', error);
+      return { success: false, error: 'An error occurred while generating OTP' };
+    }
+  }
+
+  /**
+   * Verify OTP for customer login
+   * @param {string} phoneNumber - Customer's phone number
+   * @param {string} otpCode - OTP code entered by user
+   * @returns {Promise<{valid: boolean, customer?: object, user?: object, error?: string}>}
+   */
+  static async verifyOTPForCustomer(phoneNumber, otpCode) {
+    try {
+      console.log(`[Customer Login] Verifying OTP for phone: ${phoneNumber}, OTP: ${otpCode}`);
+      
+      // Find customer by phone number
+      const { data: customer, error: customerError } = await CustomerModel.findByMobileNumber(phoneNumber);
+      
+      if (customerError || !customer) {
+        console.error(`[Customer Login] Customer not found:`, customerError);
+        return { valid: false, error: 'Customer not found' };
+      }
+      
+      if (!customer.user_id) {
+        console.error(`[Customer Login] Customer has no user_id:`, customer.customer_id);
+        return { valid: false, error: 'Customer account is not properly linked' };
+      }
+      
+      console.log(`[Customer Login] Customer found: customer_id=${customer.customer_id}, user_id=${customer.user_id}`);
+      
+      // Get the active OTP record to get requestId
+      const { data: activeOTP, error: otpRecordError } = await OTPModel.findActiveOTP(customer.user_id, 'login');
+      
+      if (otpRecordError) {
+        console.error(`[Customer Login] Error finding OTP record:`, otpRecordError);
+      }
+      
+      if (!activeOTP) {
+        console.error(`[Customer Login] No active OTP found for user ${customer.user_id}`);
+        return { valid: false, error: 'OTP request not found or expired. Please request a new OTP.' };
+      }
+      
+      console.log(`[Customer Login] Found OTP record:`, {
+        otp_id: activeOTP.otp_id,
+        requestId: activeOTP.requestId,
+        mobile_number: activeOTP.mobile_number,
+        is_used: activeOTP.is_used,
+        expires_at: activeOTP.expires_at
+      });
+      
+      // requestId (reqId) is REQUIRED for verifyOtp API
+      if (!activeOTP.requestId) {
+        console.error(`[Customer Login] ERROR: requestId (reqId) is required for verifyOtp but is null in OTP record.`);
+        return { valid: false, error: 'OTP verification failed: Missing request ID. Please request a new OTP.' };
+      }
+      
+      // Get mobile number from OTP record (stored WITHOUT +91 extension)
+      // Format it with +91 for msg91 API (same format as sendOtp)
+      const originalMobileNumber = activeOTP.mobile_number || phoneNumber.replace(/[^\d]/g, '');
+      // Remove +91 prefix if present
+      let cleanMobile = originalMobileNumber;
+      if (cleanMobile.startsWith('91') && cleanMobile.length === 12) {
+        cleanMobile = cleanMobile.substring(2);
+      }
+      const mobileForVerification = this.formatMobileNumber(cleanMobile);
+      
+      console.log(`[Customer Login] Mobile from DB: ${cleanMobile}, Formatted for msg91: ${mobileForVerification}`);
+      
+      // Store the user-entered OTP in the database row
+      console.log(`[Customer Login] Storing user-entered OTP '${otpCode}' in database row ${activeOTP.otp_id}...`);
+      const updateError = await OTPModel.updateOTPCode(activeOTP.otp_id, otpCode);
+      if (updateError.error) {
+        console.warn(`[Customer Login] Failed to update OTP code in database (non-critical):`, updateError.error);
+      }
+      
+      // Verify OTP using msg91 Widget API
+      const verifyResult = await this.verifyOTPWithMsg91(
+        mobileForVerification, // Use formatted number (with +91) for msg91
+        otpCode, 
+        activeOTP.requestId // reqId for verifyOtp request
+      );
+      
+      if (!verifyResult.valid) {
+        console.error(`[Customer Login] msg91 verification failed:`, verifyResult.error);
+        // Increment attempts
+        await OTPModel.incrementAttempts(activeOTP.otp_id);
+        return { valid: false, error: verifyResult.error || 'Invalid OTP' };
+      }
+      
+      console.log(`[Customer Login] OTP verified successfully, marking as used`);
+      // Mark OTP as used in our database
+      await OTPModel.markAsUsed(activeOTP.otp_id);
+      
+      // Get user details for session creation
+      const { data: user, error: userError } = await UserModel.findByUserId(customer.user_id);
+      
+      if (userError || !user) {
+        console.error(`[Customer Login] User not found for user_id ${customer.user_id}:`, userError);
+        return { valid: false, error: 'User account not found' };
+      }
+      
+      return { valid: true, customer, user, error: null };
+    } catch (error) {
+      console.error('[Customer Login] Exception in verifyOTPForCustomer:', error);
+      return { valid: false, error: 'An error occurred during OTP verification' };
+    }
   }
 }
 

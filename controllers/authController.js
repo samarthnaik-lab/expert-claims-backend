@@ -509,6 +509,178 @@ class AuthController {
     }
   }
 
+  // POST /api/customer/login
+  // Customer login flow: validate phone -> send OTP -> verify OTP -> create session
+  static async customerLogin(req, res) {
+    try {
+      const { phone_number, otp, step } = req.body;
+      
+      console.log('[Customer Login] Request received:', {
+        phone_number: phone_number ? phone_number.substring(0, 3) + '****' : null,
+        hasOtp: !!otp,
+        step: step
+      });
+
+      // Validate phone_number
+      if (!phone_number) {
+        return res.status(400).json({
+          success: false,
+          message: 'Phone number is required',
+          statusCode: 400
+        });
+      }
+
+      // Step 3: Verify OTP and create session (OTP provided - check this FIRST)
+      if (otp || step === 'verify_otp') {
+        if (!otp) {
+          return res.status(400).json({
+            success: false,
+            message: 'OTP is required for verification',
+            statusCode: 400
+          });
+        }
+
+        console.log('[Customer Login] Step 3: Verifying OTP...');
+        
+        const verifyResult = await AuthService.verifyOTPForCustomer(phone_number, otp);
+
+        if (!verifyResult.valid) {
+          console.error(`[Customer Login] OTP verification failed:`, verifyResult.error);
+          return res.status(401).json({
+            success: false,
+            message: verifyResult.error || 'Invalid OTP',
+            statusCode: 401
+          });
+        }
+
+        console.log(`[Customer Login] OTP verified successfully, creating session for customer ${verifyResult.customer.customer_id}`);
+        
+        // Generate JWT token
+        const userId = AuthService.getUserId(verifyResult.user);
+        const jwtToken = AuthService.generateJWT(userId, verifyResult.user.email || phone_number, 'customer');
+
+        // Calculate expiration (3 hours from now)
+        const expiresAt = new Date(Date.now() + (3 * 60 * 60 * 1000));
+
+        // Create session
+        const sessionResult = await AuthService.createSession(userId, jwtToken, expiresAt, req);
+
+        if (!sessionResult.success) {
+          return res.status(500).json({
+            status: 'error',
+            message: 'Failed to create session',
+            statusCode: 500
+          });
+        }
+
+        // Calculate session expiry details for frontend display
+        const expiresAtISO = expiresAt.toISOString();
+        const expiresAtTimestamp = expiresAt.getTime();
+        const expiresInSeconds = Math.floor((expiresAtTimestamp - Date.now()) / 1000);
+
+        console.log(`[Customer Login] Session created successfully: session_id=${sessionResult.sessionId}, user_id=${userId}`);
+
+        return res.status(200).json({
+          status: 'success',
+          success: true,
+          statusCode: 200,
+          message: 'Login successful',
+          token: jwtToken,
+          jwtToken: jwtToken,
+          session_id: sessionResult.sessionId,
+          sessionId: sessionResult.sessionId,
+          userId: userId.toString(),
+          userRole: 'customer',
+          expiry: expiresAtISO,
+          expiresAt: expiresAtTimestamp,
+          expiresIn: expiresInSeconds,
+          expiresAtFormatted: expiresAt.toLocaleString()
+        });
+      }
+
+      // Step 1: Validate phone number exists (step === 'validate_phone' or no step provided)
+      else if (!step || step === 'validate_phone') {
+        console.log('[Customer Login] Step 1: Validating phone number...');
+        
+        const checkResult = await AuthService.checkCustomerExists(phone_number);
+
+        if (!checkResult.exists) {
+          console.log(`[Customer Login] Customer not found with phone: ${phone_number}`);
+          return res.status(404).json({
+            success: false,
+            message: checkResult.error || 'Customer not found with this phone number',
+            statusCode: 404,
+            customerExists: false
+          });
+        }
+
+        console.log(`[Customer Login] Phone number validated. Customer exists: customer_id=${checkResult.customer.customer_id}`);
+        
+        return res.status(200).json({
+          success: true,
+          message: 'Phone number verified',
+          statusCode: 200,
+          customerExists: true,
+          nextStep: 'send_otp'
+        });
+      }
+
+      // Step 2: Send OTP (step === 'send_otp')
+      else if (step === 'send_otp') {
+        console.log('[Customer Login] Step 2: Sending OTP...');
+        
+        // First verify customer exists
+        const checkResult = await AuthService.checkCustomerExists(phone_number);
+
+        if (!checkResult.exists) {
+          return res.status(404).json({
+            success: false,
+            message: 'Customer not found with this phone number',
+            statusCode: 404
+          });
+        }
+
+        // Generate and send OTP
+        const otpResult = await AuthService.generateAndSaveOTPForCustomer(phone_number);
+
+        if (!otpResult.success) {
+          return res.status(500).json({
+            success: false,
+            message: otpResult.error || 'Failed to send OTP',
+            statusCode: 500
+          });
+        }
+
+        console.log(`[Customer Login] OTP sent successfully. RequestId: ${otpResult.requestId}`);
+
+        return res.status(200).json({
+          success: true,
+          message: `OTP sent to mobile number ${otpResult.mobile}. Please check your SMS.`,
+          otp: null, // Widget API generates OTP - we don't have it
+          contactType: otpResult.contactType,
+          contactInfo: otpResult.mobile,
+          expiresAt: otpResult.expiresAt,
+          requestId: otpResult.requestId,
+          nextStep: 'verify_otp',
+          requiresOtp: true
+        });
+      }
+
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid step. Use: validate_phone, send_otp, or verify_otp (or omit step and provide otp)',
+        statusCode: 400
+      });
+    } catch (error) {
+      console.error('[Customer Login] Error:', error);
+      return res.status(500).json({
+        success: false,
+        message: 'Internal server error',
+        statusCode: 500
+      });
+    }
+  }
+
   // POST /api/logout
   static async logout(req, res) {
     try {

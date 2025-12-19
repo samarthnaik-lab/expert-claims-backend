@@ -6,6 +6,9 @@ const router = express.Router();
 // Login route
 router.post('/login', AuthController.login);
 
+// Customer login route (phone-based OTP flow)
+router.post('/customer/login', AuthController.customerLogin);
+
 // Logout route
 router.post('/logout', AuthController.logout);
 
