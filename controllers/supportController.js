@@ -3500,6 +3500,392 @@ class SupportController {
       });
     }
   }
+
+  // POST /support/apply-leave
+  // Apply for leave (employee endpoint)
+  static async applyLeave(req, res) {
+    try {
+      const {
+        employee_id,
+        leave_type_id,
+        start_date,
+        end_date,
+        total_days,
+        reason,
+        emergency_contact_name,
+        emergency_contact_phone
+      } = req.body;
+
+      console.log('[Employee] Applying for leave:', {
+        employee_id,
+        leave_type_id,
+        start_date,
+        end_date,
+        total_days
+      });
+
+      // Validate required fields
+      if (!employee_id || !leave_type_id || !start_date || !reason) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'Missing required fields: employee_id, leave_type_id, start_date, and reason are required',
+          statusCode: 400
+        });
+      }
+
+      // Validate employee_id exists
+      const employeeIdNum = parseInt(employee_id);
+      if (isNaN(employeeIdNum) || employeeIdNum <= 0) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'employee_id must be a valid positive number',
+          statusCode: 400
+        });
+      }
+
+      // Validate leave_type_id exists
+      const leaveTypeIdNum = parseInt(leave_type_id);
+      if (isNaN(leaveTypeIdNum) || leaveTypeIdNum <= 0) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'leave_type_id must be a valid positive number',
+          statusCode: 400
+        });
+      }
+
+      // Check if employee exists
+      const { data: employee, error: employeeError } = await supabase
+        .from('employees')
+        .select('employee_id')
+        .eq('employee_id', employeeIdNum)
+        .maybeSingle();
+
+      if (employeeError || !employee) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Employee not found',
+          statusCode: 404
+        });
+      }
+
+      // Check if leave type exists
+      const { data: leaveType, error: leaveTypeError } = await supabase
+        .from('leave_types')
+        .select('leave_type_id, is_active')
+        .eq('leave_type_id', leaveTypeIdNum)
+        .maybeSingle();
+
+      if (leaveTypeError || !leaveType) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Leave type not found',
+          statusCode: 404
+        });
+      }
+
+      if (!leaveType.is_active) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'This leave type is not active',
+          statusCode: 400
+        });
+      }
+
+      // Calculate total_days if not provided
+      let calculatedTotalDays = total_days;
+      if (!calculatedTotalDays || isNaN(parseInt(calculatedTotalDays))) {
+        const start = new Date(start_date);
+        const end = new Date(end_date || start_date);
+        const diffTime = Math.abs(end.getTime() - start.getTime());
+        calculatedTotalDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1; // +1 to include both start and end dates
+      } else {
+        calculatedTotalDays = parseInt(calculatedTotalDays);
+      }
+
+      // Generate application_id by finding max and incrementing
+      const { data: maxApplication, error: maxError } = await supabase
+        .from('leave_applications')
+        .select('application_id')
+        .order('application_id', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (maxError && maxError.code !== 'PGRST116') { // PGRST116 = no rows returned
+        console.error('[Employee] Error getting max application_id:', maxError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to generate application ID',
+          statusCode: 500
+        });
+      }
+
+      const nextApplicationId = (maxApplication?.application_id || 0) + 1;
+
+      // Prepare leave application data
+      const leaveData = {
+        application_id: nextApplicationId,
+        employee_id: employeeIdNum,
+        leave_type_id: leaveTypeIdNum,
+        start_date: start_date,
+        end_date: end_date || start_date,
+        total_days: calculatedTotalDays,
+        reason: reason,
+        emergency_contact: {
+          name: emergency_contact_name || 'Not provided',
+          phone: emergency_contact_phone || 'Not provided'
+        },
+        status: 'pending',
+        applied_date: new Date().toISOString().split('T')[0], // Format: YYYY-MM-DD
+        approved_by: null,
+        approved_date: null,
+        rejection_reason: null,
+        created_time: new Date().toISOString(),
+        updated_time: new Date().toISOString()
+      };
+
+      // Insert leave application
+      const { data: newLeave, error: insertError } = await supabase
+        .from('leave_applications')
+        .insert([leaveData])
+        .select()
+        .single();
+
+      if (insertError) {
+        console.error('[Employee] Error inserting leave application:', insertError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to submit leave application: ' + (insertError.message || 'Unknown error'),
+          statusCode: 500
+        });
+      }
+
+      console.log('[Employee] Leave application submitted successfully:', newLeave.application_id);
+
+      return res.status(201).json({
+        status: 'success',
+        message: 'Leave application submitted successfully',
+        data: {
+          application_id: newLeave.application_id,
+          employee_id: newLeave.employee_id,
+          leave_type_id: newLeave.leave_type_id,
+          start_date: newLeave.start_date,
+          end_date: newLeave.end_date,
+          total_days: newLeave.total_days,
+          status: newLeave.status,
+          applied_date: newLeave.applied_date
+        }
+      });
+
+    } catch (error) {
+      console.error('[Employee] Apply leave error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // GET /support/getlevetypes
+  // Get all active leave types
+  static async getLeaveTypes(req, res) {
+    try {
+      console.log('[Support] Fetching leave types');
+
+      const { data: leaveTypes, error: leaveTypesError } = await supabase
+        .from('leave_types')
+        .select('*')
+        .eq('is_active', true)
+        .order('leave_type_id', { ascending: true });
+
+      if (leaveTypesError) {
+        console.error('[Support] Error fetching leave types:', leaveTypesError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to fetch leave types',
+          statusCode: 500
+        });
+      }
+
+      return res.status(200).json({
+        status: 'success',
+        message: 'Leave types retrieved successfully',
+        data: leaveTypes || []
+      });
+
+    } catch (error) {
+      console.error('[Support] Get leave types error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // GET /support/getempleaves?employee_id={employee_id}&page={page}&size={size}
+  // Get leave applications for a specific employee with pagination
+  static async getEmployeeLeaves(req, res) {
+    try {
+      const { employee_id, page, size } = req.query;
+
+      // Validate employee_id parameter
+      if (!employee_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'employee_id query parameter is required',
+          statusCode: 400
+        });
+      }
+
+      const employeeIdNum = parseInt(employee_id);
+      if (isNaN(employeeIdNum) || employeeIdNum <= 0) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'employee_id must be a valid positive number',
+          statusCode: 400
+        });
+      }
+
+      // Handle pagination
+      const pageNum = page ? parseInt(page) : 1;
+      const sizeNum = size ? parseInt(size) : 10;
+
+      if (isNaN(pageNum) || pageNum < 1) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'page must be a valid positive number',
+          statusCode: 400
+        });
+      }
+
+      if (isNaN(sizeNum) || sizeNum < 1) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'size must be a valid positive number',
+          statusCode: 400
+        });
+      }
+
+      console.log(`[Employee] Fetching leaves for employee_id: ${employeeIdNum}, page: ${pageNum}, size: ${sizeNum}`);
+
+      // Calculate pagination
+      const offset = (pageNum - 1) * sizeNum;
+
+      // Fetch leave applications for this employee with pagination
+      const { data: leaveApplications, error: leaveError, count } = await supabase
+        .from('leave_applications')
+        .select('*', { count: 'exact' })
+        .eq('employee_id', employeeIdNum)
+        .order('application_id', { ascending: false })
+        .range(offset, offset + sizeNum - 1);
+
+      if (leaveError) {
+        console.error('[Employee] Error fetching leave applications:', leaveError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to fetch leave applications',
+          statusCode: 500
+        });
+      }
+
+      // Get leave types for these applications
+      const leaveTypeIds = [...new Set((leaveApplications || []).map(la => la.leave_type_id).filter(Boolean))];
+      
+      let leaveTypesMap = {};
+      if (leaveTypeIds.length > 0) {
+        const { data: leaveTypes, error: leaveTypesError } = await supabase
+          .from('leave_types')
+          .select('leave_type_id, type_name')
+          .in('leave_type_id', leaveTypeIds);
+
+        if (!leaveTypesError && leaveTypes) {
+          leaveTypesMap = leaveTypes.reduce((acc, lt) => {
+            acc[lt.leave_type_id] = lt;
+            return acc;
+          }, {});
+        }
+      }
+
+      // Get employee details for name, department, mobile, and email
+      const { data: employee, error: employeeError } = await supabase
+        .from('employees')
+        .select('employee_id, user_id, first_name, last_name, department, mobile_number')
+        .eq('employee_id', employeeIdNum)
+        .maybeSingle();
+
+      let employeeEmail = 'N/A';
+      let designation = employee?.department || 'N/A';
+      
+      if (employee && employee.user_id) {
+        const { data: user, error: userError } = await supabase
+          .from('users')
+          .select('email, role')
+          .eq('user_id', employee.user_id)
+          .maybeSingle();
+
+        if (!userError && user) {
+          employeeEmail = user.email || 'N/A';
+          // Use department from employees table, fallback to role from users table
+          designation = employee?.department || user.role || 'N/A';
+        }
+      }
+
+      // Format the response to match frontend expectations
+      const formattedLeaves = (leaveApplications || []).map(leave => {
+        const leaveType = leave.leave_type_id ? leaveTypesMap[leave.leave_type_id] : null;
+
+        return {
+          application_id: leave.application_id,
+          employee_id: leave.employee_id,
+          leave_type_id: leave.leave_type_id,
+          start_date: leave.start_date,
+          end_date: leave.end_date,
+          total_days: leave.total_days,
+          reason: leave.reason,
+          status: leave.status || 'pending',
+          applied_date: leave.applied_date,
+          designation: designation,
+          employee_email: employeeEmail,
+          contact_number: employee?.mobile_number || null,
+          employees: {
+            employee_id: employeeIdNum,
+            first_name: employee?.first_name || '',
+            last_name: employee?.last_name || ''
+          },
+          leave_types: {
+            leave_type_id: leaveType?.leave_type_id || null,
+            type_name: leaveType?.type_name || 'N/A'
+          },
+          emergency_contact: leave.emergency_contact || null
+        };
+      });
+
+      // Build response matching the expected format
+      const response = {
+        status: 'success',
+        message: 'Leave applications retrieved successfully',
+        data: formattedLeaves,
+        pagination: {
+          page: pageNum,
+          size: sizeNum,
+          total: count || 0,
+          totalPages: count ? Math.ceil(count / sizeNum) : 0
+        }
+      };
+
+      // Return as array with single object (as expected by frontend)
+      return res.status(200).json([response]);
+
+    } catch (error) {
+      console.error('[Employee] Get employee leaves error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
 }
 
 export default SupportController;

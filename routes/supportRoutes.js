@@ -80,6 +80,15 @@ router.get('/getuserdetails', SupportController.getUserDetails);
 // POST /support/list-documents - List all documents for a case (multipart/form-data with case_id)
 router.post('/list-documents', upload.none(), SupportController.listDocuments);
 
+// POST /support/apply-leave - Apply for leave (employee endpoint)
+router.post('/apply-leave', SupportController.applyLeave);
+
+// GET /support/getempleaves?employee_id={employee_id}&page={page}&size={size} - Get employee's leave applications
+router.get('/getempleaves', SupportController.getEmployeeLeaves);
+
+// GET /support/getlevetypes - Get all active leave types
+router.get('/getlevetypes', SupportController.getLeaveTypes);
+
 // GET /support/{uuid} - Support UUID routes (like n8n webhooks) - for backward compatibility
 // This allows routes like /support/2d7eb946-588f-436d-8ebe-ccb118babf12 to work
 // Must be after all specific routes to avoid conflicts
