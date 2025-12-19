@@ -93,6 +93,9 @@ app.use('/public', publicRoutes);
 // Support Team routes
 app.use('/support', supportRoutes);
 
+// Webhook routes (for n8n and external integrations)
+app.use('/webhook', supportRoutes);
+
 // Customer routes (new role)
 app.use('/customer', customerRoutes);
 

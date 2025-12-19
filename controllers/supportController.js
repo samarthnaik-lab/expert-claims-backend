@@ -2857,6 +2857,17 @@ class SupportController {
           });
         }
 
+        // Validate and set status (must be 'paid' or 'pending')
+        let paymentStatus = 'pending'; // Default
+        if (payment.status) {
+          const statusLower = payment.status.toLowerCase();
+          if (statusLower === 'paid' || statusLower === 'pending') {
+            paymentStatus = statusLower;
+          } else {
+            console.warn(`[Create Payment Phases] Invalid status "${payment.status}", defaulting to "pending"`);
+          }
+        }
+
         const paymentPhaseData = {
           case_phase_id: nextPhaseId++,
           case_id: fullCaseId,
@@ -2864,7 +2875,7 @@ class SupportController {
           case_type_id: payment.case_type_id ? parseInt(payment.case_type_id) : existingCase.case_type_id || null,
           phase_amount: payment.phase_amount ? parseInt(payment.phase_amount) : null,
           due_date: payment.due_date || null,
-          status: payment.status || 'pending',
+          status: paymentStatus, // Use validated status
           paid_amount: payment.paid_amount ? parseInt(payment.paid_amount) : null,
           payment_date: payment.payment_date || null,
           payment_method: payment.payment_method || null,
@@ -2911,6 +2922,147 @@ class SupportController {
 
     } catch (error) {
       console.error('[Create Payment Phases] Error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // PATCH /webhook/updatepayment
+  // Update a payment phase by case_phase_id
+  static async updatePayment(req, res) {
+    try {
+      const {
+        case_phase_id,
+        phase_amount,
+        phase_name,
+        due_date,
+        status,
+        paid_amount,
+        payment_date,
+        payment_method,
+        transaction_reference,
+        invoice_number,
+        notes,
+        updated_by
+      } = req.body;
+
+      // Validate required field
+      if (!case_phase_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'case_phase_id is required',
+          statusCode: 400
+        });
+      }
+
+      console.log(`[Update Payment] Updating payment phase: ${case_phase_id}`);
+
+      // Step 1: Verify payment phase exists
+      const { data: existingPayment, error: paymentError } = await supabase
+        .from('case_payment_phases')
+        .select('*')
+        .eq('case_phase_id', parseInt(case_phase_id))
+        .single();
+
+      if (paymentError || !existingPayment) {
+        return res.status(404).json({
+          status: 'error',
+          message: `Payment phase with ID ${case_phase_id} not found`,
+          statusCode: 404
+        });
+      }
+
+      // Step 2: Prepare update data
+      const updateData = {
+        updated_time: new Date().toISOString()
+      };
+
+      // Only update fields that are provided (not undefined)
+      if (phase_amount !== undefined) {
+        updateData.phase_amount = phase_amount !== null ? parseInt(phase_amount) : null;
+      }
+
+      if (phase_name !== undefined) {
+        updateData.phase_name = phase_name || null;
+      }
+
+      if (due_date !== undefined) {
+        updateData.due_date = due_date || null;
+      }
+
+      if (status !== undefined) {
+        // Validate status value (should be 'paid' or 'pending')
+        if (status && !['paid', 'pending'].includes(status.toLowerCase())) {
+          return res.status(400).json({
+            status: 'error',
+            message: 'status must be either "paid" or "pending"',
+            statusCode: 400
+          });
+        }
+        updateData.status = status ? status.toLowerCase() : 'pending';
+      }
+
+      if (paid_amount !== undefined) {
+        updateData.paid_amount = paid_amount !== null ? parseInt(paid_amount) : null;
+      }
+
+      if (payment_date !== undefined) {
+        updateData.payment_date = payment_date || null;
+      }
+
+      if (payment_method !== undefined) {
+        updateData.payment_method = payment_method || null;
+      }
+
+      if (transaction_reference !== undefined) {
+        updateData.transaction_reference = transaction_reference || null;
+      }
+
+      if (invoice_number !== undefined) {
+        updateData.invoice_number = invoice_number || null;
+      }
+
+      if (notes !== undefined) {
+        updateData.notes = notes || null;
+      }
+
+      if (updated_by !== undefined && updated_by !== null) {
+        updateData.updated_by = parseInt(updated_by);
+      }
+
+      // Step 3: Update the payment phase
+      const { data: updatedPayment, error: updateError } = await supabase
+        .from('case_payment_phases')
+        .update(updateData)
+        .eq('case_phase_id', parseInt(case_phase_id))
+        .select()
+        .single();
+
+      if (updateError) {
+        console.error('[Update Payment] Error updating payment phase:', updateError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to update payment phase',
+          error: updateError.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      console.log(`[Update Payment] Successfully updated payment phase: ${case_phase_id}`);
+
+      // Step 4: Return success response
+      return res.status(200).json({
+        status: 'success',
+        message: 'Payment phase updated successfully',
+        data: updatedPayment,
+        statusCode: 200
+      });
+
+    } catch (error) {
+      console.error('[Update Payment] Error:', error);
       return res.status(500).json({
         status: 'error',
         message: 'Internal server error: ' + error.message,
