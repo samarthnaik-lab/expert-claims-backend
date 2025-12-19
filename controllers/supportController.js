@@ -2190,13 +2190,7 @@ class SupportController {
           case_types(*),
           customers(*),
           partners!cases_referring_partner_id_fkey(*),
-          employees!cases_assigned_to_fkey(
-            employee_id,
-            first_name,
-            last_name,
-            department,
-            designation
-          )
+          employees!cases_assigned_to_fkey(*)
         `)
         .eq('case_id', case_id)
         .eq('deleted_flag', false)
@@ -2256,18 +2250,7 @@ class SupportController {
         // 3. Get case_documents (filter out deleted)
         supabase
           .from('case_documents')
-          .select(`
-            *,
-            document_categories!case_documents_category_id_fkey(
-              category_id,
-              document_name,
-              is_mandatory
-            ),
-            users!case_documents_uploaded_by_fkey(
-              user_id,
-              email
-            )
-          `)
+          .select('*')
           .eq('case_id', case_id)
           .eq('deleted_flag', false)
           .order('upload_time', { ascending: false })
@@ -2305,101 +2288,89 @@ class SupportController {
           .catch(() => ({ data: [], error: null }))
       ]);
 
-      // Extract numeric case_id from string (e.g., "ECSI-25-121" -> 121)
-      // Try to extract the number after the last dash
-      let numericCaseId = null;
-      if (case_id && typeof case_id === 'string') {
-        const parts = case_id.split('-');
-        if (parts.length > 0) {
-          const lastPart = parts[parts.length - 1];
-          numericCaseId = parseInt(lastPart, 10);
-          if (isNaN(numericCaseId)) {
-            numericCaseId = null;
-          }
-        }
-      }
-
-      // Flatten case data and build response matching frontend requirements
-      // All fields must be at root level with exact field names
+      // Build response matching exact frontend requirements
       const response = {
-        // Case fields (flattened from caseData)
-        case_id: numericCaseId || caseData.case_id || case_id,
+        // Case fields at root level
+        case_id: caseData.case_id || case_id,
         case_summary: caseData.case_summary || null,
+        referring_partner_id: caseData.referring_partner_id || null,
+        assigned_to: caseData.assigned_to || null,
         case_description: caseData.case_description || null,
         priority: caseData.priority || null,
         ticket_stage: caseData.ticket_stage || null,
         due_date: caseData.due_date || null,
         case_value: caseData.case_value || null,
         value_currency: caseData.value_currency || null,
+        "service amount": caseData.service_amount || null,
+        "claim amount": caseData.claim_amount || null,
         customer_id: caseData.customer_id || null,
-        assigned_to: caseData.assigned_to || null,
         updated_time: caseData.updated_time || null,
-        created_time: caseData.created_time || null,
-        referral_date: caseData.referral_date || null,
-        referring_partner_id: caseData.referring_partner_id || null,
-        case_type_id: caseData.case_type_id || null,
-        resolution_summary: caseData.resolution_summary || null,
-        customer_satisfaction_rating: caseData.customer_satisfaction_rating || null,
-        referral_notes: caseData.referral_notes || null,
-        bonus_eligible: caseData.bonus_eligible || null,
-        value_confirmed: caseData.value_confirmed || null,
-        value_confirmed_by: caseData.value_confirmed_by || null,
-        value_confirmed_date: caseData.value_confirmed_date || null,
-        created_by: caseData.created_by || null,
-        updated_by: caseData.updated_by || null,
-        task_type: caseData.task_type || null,
-        service_amount: caseData.service_amount || null,
-        claim_amount: caseData.claim_amount || null,
         
-        // Related objects (flattened)
-        case_types: caseData.case_types ? {
-          case_type_id: caseData.case_types.case_type_id || null,
-          case_type_name: caseData.case_types.case_type_name || null,
-          description: caseData.case_types.description || null,
-          is_commercial: caseData.case_types.is_commercial || null,
-          is_active: caseData.case_types.is_active || null
-        } : null,
-        
-        customers: caseData.customers ? {
-          customer_id: caseData.customers.customer_id || null,
-          first_name: caseData.customers.first_name || null,
-          last_name: caseData.customers.last_name || null,
-          email_address: caseData.customers.email_address || null,
-          mobile_number: caseData.customers.mobile_number || null,
-          emergency_contact: caseData.customers.emergency_contact || null,
-          address: caseData.customers.address || null,
-          customer_type: caseData.customers.customer_type || null,
-          source: caseData.customers.source || null,
-          user_id: caseData.customers.user_id || null,
-          created_time: caseData.customers.created_time || null,
-          updated_time: caseData.customers.updated_time || null,
-          deleted_flag: caseData.customers.deleted_flag || false,
-          notes: caseData.customers.notes || null,
-          company_name: caseData.customers.company_name || null,
-          language_preference: caseData.customers.language_preference || null,
-          communication_preferences: caseData.customers.communication_preferences || null,
-          gender: caseData.customers.gender || null,
-          age: caseData.customers.age || null,
-          partner_id: caseData.customers.partner_id || null,
-          gstin: caseData.customers.gstin || null,
-          pan: caseData.customers.pan || null,
-          state: caseData.customers.state || null,
-          pincode: caseData.customers.pincode || null
-        } : null,
+        // Related arrays
+        case_documents: (documentsResult.data || []).map(doc => ({
+          case_id: doc.case_id || case_id,
+          checksum: doc.checksum || null,
+          file_path: doc.file_path || null,
+          file_size: doc.file_size || 0,
+          file_type: doc.file_type || "unknown",
+          is_active: doc.is_active !== undefined ? doc.is_active : true,
+          mime_type: doc.mime_type || null,
+          category_id: doc.category_id || null,
+          document_id: doc.document_id || null,
+          upload_time: doc.upload_time || null,
+          uploaded_by: doc.uploaded_by || null,
+          access_count: doc.access_count || 0,
+          deleted_flag: doc.deleted_flag || false,
+          version_number: doc.version_number || null,
+          stored_filename: doc.stored_filename || null,
+          original_filename: doc.original_filename || null,
+          last_accessed_time: doc.last_accessed_time || null,
+          is_customer_visible: doc.is_customer_visible !== undefined ? doc.is_customer_visible : false
+        })),
         
         employees: caseData.employees ? {
-          employee_id: caseData.employees.employee_id || null,
-          first_name: caseData.employees.first_name || null,
-          last_name: caseData.employees.last_name || null,
+          age: caseData.employees.age || null,
+          gender: caseData.employees.gender || "",
+          address: caseData.employees.address || null,
+          manager: caseData.employees.manager || null,
           user_id: caseData.employees.user_id || null,
+          last_name: caseData.employees.last_name || null,
+          team_name: caseData.employees.team_name || null,
+          created_by: caseData.employees.created_by || null,
           department: caseData.employees.department || null,
-          designation: caseData.employees.designation || null,
-          mobile_number: caseData.employees.mobile_number || null,
+          first_name: caseData.employees.first_name || null,
+          pan_number: caseData.employees.pan_number || null,
+          reports_to: caseData.employees.reports_to || null,
+          updated_by: caseData.employees.updated_by || null,
           work_phone: caseData.employees.work_phone || null,
-          email: caseData.employees.email || null
+          designation: caseData.employees.designation || null,
+          employee_id: caseData.employees.employee_id || null,
+          bank_details: caseData.employees.bank_details || null,
+          created_time: caseData.employees.created_time || null,
+          deleted_flag: caseData.employees.deleted_flag || false,
+          joining_date: caseData.employees.joining_date || null,
+          updated_time: caseData.employees.updated_time || null,
+          aadhar_number: caseData.employees.aadhar_number || null,
+          mobile_number: caseData.employees.mobile_number || null,
+          work_extension: caseData.employees.work_extension || null,
+          office_location: caseData.employees.office_location || null,
+          "additional notes": caseData.employees["additional notes"] || null,
+          management_level: caseData.employees.management_level || null,
+          emergency_contact: caseData.employees.emergency_contact || null,
+          employment_status: caseData.employees.employment_status || null,
+          can_approve_bonuses: caseData.employees.can_approve_bonuses || false,
+          profile_picture_url: caseData.employees.profile_picture_url || null,
+          "emergency contact Name": caseData.employees["emergency contact Name"] || null,
+          "communication preference": caseData.employees["communication preference"] || null,
+          max_bonus_approval_limit: caseData.employees.max_bonus_approval_limit || null,
+          "emergency contact relation": caseData.employees["emergency contact relation"] || null
         } : null,
         
-        // Related arrays with exact field names expected by frontend
+        case_types: caseData.case_types ? {
+          description: caseData.case_types.description || null,
+          case_type_name: caseData.case_types.case_type_name || null
+        } : null,
+        
         case_stakeholders: (stakeholdersResult.data || []).map(stakeholder => ({
           stakeholder_id: stakeholder.stakeholder_id || null,
           case_id: stakeholder.case_id || case_id,
@@ -2414,54 +2385,6 @@ class SupportController {
           updated_by: stakeholder.updated_by || null
         })),
         
-        case_comments: (commentsResult.data || []).map(comment => ({
-          case_id: comment.case_id || case_id,
-          user_id: comment.user_id || null,
-          comment_id: comment.comment_id || null,
-          is_internal: comment.is_internal || false,
-          comment_text: comment.comment_text || null,
-          created_time: comment.created_time || null,
-          updated_time: comment.updated_time || null,
-          parent_comment_id: comment.parent_comment_id || 0
-        })),
-        
-        case_documents: (documentsResult.data || []).map(doc => ({
-          document_id: doc.document_id || null,
-          case_id: doc.case_id || case_id,
-          category_id: doc.category_id || null,
-          original_filename: doc.original_filename || null,
-          stored_filename: doc.stored_filename || null,
-          file_path: doc.file_path || null,
-          file_size: doc.file_size || null,
-          file_type: doc.file_type || null,
-          mime_type: doc.mime_type || null,
-          upload_time: doc.upload_time || null,
-          uploaded_by: doc.uploaded_by || null,
-          is_customer_visible: doc.is_customer_visible || null,
-          is_active: doc.is_active || null,
-          document_categories: doc.document_categories || null
-        })),
-        
-        case_payment_phases: (paymentPhasesResult.data || []).map(phase => ({
-          case_phase_id: phase.case_phase_id || null,
-          case_id: phase.case_id || case_id,
-          phase_name: phase.phase_name || null,
-          case_type_id: phase.case_type_id || null,
-          phase_amount: phase.phase_amount || null,
-          due_date: phase.due_date || null,
-          status: phase.status || null,
-          paid_amount: phase.paid_amount || null,
-          payment_date: phase.payment_date || null,
-          payment_method: phase.payment_method || null,
-          transaction_reference: phase.transaction_reference || null,
-          invoice_number: phase.invoice_number || null,
-          notes: phase.notes || null,
-          created_time: phase.created_time || null,
-          updated_time: phase.updated_time || null,
-          created_by: phase.created_by || null,
-          updated_by: phase.updated_by || null
-        })),
-        
         case_stage_history: (stageHistoryResult.data || []).map(history => ({
           stage_history_id: history.stage_history_id || null,
           case_id: history.case_id || case_id,
@@ -2474,12 +2397,72 @@ class SupportController {
           created_by: history.created_by || null,
           users: history.users || null,
           employees: history.employees || null
-        }))
+        })),
+        
+        case_payment_phases: (paymentPhasesResult.data || []).map(phase => ({
+          notes: phase.notes || null,
+          status: phase.status || null,
+          case_id: phase.case_id || case_id,
+          due_date: phase.due_date || null,
+          created_by: phase.created_by || null,
+          phase_name: phase.phase_name || null,
+          updated_by: phase.updated_by || null,
+          paid_amount: phase.paid_amount || 0,
+          case_type_id: phase.case_type_id || null,
+          created_time: phase.created_time || null,
+          payment_date: phase.payment_date || null,
+          phase_amount: phase.phase_amount || null,
+          updated_time: phase.updated_time || null,
+          case_phase_id: phase.case_phase_id || null,
+          invoice_number: phase.invoice_number || null,
+          payment_method: phase.payment_method || null,
+          transaction_reference: phase.transaction_reference || null
+        })),
+        
+        case_comments: (commentsResult.data || []).map(comment => ({
+          case_id: comment.case_id || case_id,
+          user_id: comment.user_id || null,
+          comment_id: comment.comment_id || null,
+          is_internal: comment.is_internal || false,
+          comment_text: comment.comment_text || null,
+          created_time: comment.created_time || null,
+          updated_time: comment.updated_time || null,
+          parent_comment_id: comment.parent_comment_id || null
+        })),
+        
+        customers: caseData.customers ? {
+          age: caseData.customers.age || null,
+          pan: caseData.customers.pan || null,
+          gstin: caseData.customers.gstin || null,
+          notes: caseData.customers.notes || "",
+          state: caseData.customers.state || null,
+          gender: caseData.customers.gender || null,
+          source: caseData.customers.source || null,
+          address: caseData.customers.address || null,
+          pincode: caseData.customers.pincode || null,
+          user_id: caseData.customers.user_id || null,
+          last_name: caseData.customers.last_name || null,
+          created_by: caseData.customers.created_by || null,
+          first_name: caseData.customers.first_name || null,
+          partner_id: caseData.customers.partner_id || null,
+          updated_by: caseData.customers.updated_by || null,
+          customer_id: caseData.customers.customer_id || null,
+          "claim number": caseData.customers["claim number"] || null,
+          company_name: caseData.customers.company_name || null,
+          created_time: caseData.customers.created_time || null,
+          deleted_flag: caseData.customers.deleted_flag || false,
+          updated_time: caseData.customers.updated_time || null,
+          customer_type: caseData.customers.customer_type || null,
+          email_address: caseData.customers.email_address || null,
+          mobile_number: caseData.customers.mobile_number || null,
+          emergency_contact: caseData.customers.emergency_contact || "",
+          language_preference: caseData.customers.language_preference || "",
+          communication_preferences: caseData.customers.communication_preferences || null
+        } : null
       };
 
-      // Return direct object (Option 1 - Recommended format)
-      // Frontend can handle both array and object formats
-      return res.status(200).json(response);
+      // Return as array with single object (matching frontend requirements)
+      return res.status(200).json([response]);
 
     } catch (error) {
       console.error('[Support Team] Unexpected error in getEverythingCases:', error);
