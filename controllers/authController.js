@@ -6,18 +6,10 @@ class AuthController {
   // Login endpoint handler
   static async login(req, res) {
     try {
-      console.log('Login request received:', {
-        body: req.body,
-        hasEmail: !!req.body.email,
-        hasPassword: !!req.body.password,
-        hasRole: !!req.body.role
-      });
-      
       const { email, password, role, otp, mobile, step } = req.body;
 
       // Validate required fields
       if (!email || !password || !role) {
-        console.error('Missing required fields:', { email: !!email, password: !!password, role: !!role });
         return res.status(400).json({
           success: false,
           message: 'Missing required fields: email, password, and role are required',
@@ -64,13 +56,9 @@ class AuthController {
   
   static async handleDirectLogin(email, password, role, req, res) {
     try {
-      console.log('Login attempt:', { email, role });
-      
-      const { valid, user, error } = await AuthService.validateCredentials(email, password, role, true);
+      const { valid, user, error } = await AuthService.validateCredentials(email, password, role, false);
 
       if (!valid) {
-        console.error('Invalid credentials:', { email, role, error });
-        // Return specific error message without revealing too much
         const errorMessage = error || 'Invalid credentials';
         return res.status(401).json({
           status: 'error',
@@ -80,19 +68,17 @@ class AuthController {
         });
       }
 
-      console.log('Credentials validated, creating session for user:', user.user_id);
-      
       const userId = AuthService.getUserId(user);
       const jwtToken = AuthService.generateJWT(userId, user.email, role);
-      console.log('JWT token generated');
-
-      // 3 hours from now
       const expiresAt = new Date(Date.now() + (3 * 60 * 60 * 1000));
 
-      const sessionResult = await AuthService.createSession(userId, jwtToken, expiresAt, req);
+      // Create session and update last_login in parallel
+      const [sessionResult] = await Promise.all([
+        AuthService.createSession(userId, jwtToken, expiresAt, req),
+        AuthService.updateLastLoginAsync(userId) // Non-blocking update
+      ]);
 
       if (!sessionResult.success) {
-        console.error('Session creation failed:', sessionResult.error);
         return res.status(500).json({
           status: 'error',
           message: 'Failed to create session: ' + (sessionResult.error || 'Unknown error'),
@@ -100,44 +86,32 @@ class AuthController {
         });
       }
 
-      console.log('Login successful, returning response');
-      
-      // Calculate session expiry details for frontend display
+      // Calculate session expiry details
       const expiresAtISO = expiresAt.toISOString();
       const expiresAtTimestamp = expiresAt.getTime();
       const expiresInSeconds = Math.floor((expiresAtTimestamp - Date.now()) / 1000);
 
-      const response = {
-        status: 'success', // For frontend to recognize success
-        success: true, // For frontend to recognize success
-        statusCode: 200, // HTTP status code
+      return res.status(200).json({
+        status: 'success',
+        success: true,
+        statusCode: 200,
         message: 'Login successful',
         token: jwtToken,
-        jwtToken: jwtToken, // For frontend localStorage compatibility
+        jwtToken: jwtToken,
         session_id: sessionResult.sessionId,
-        sessionId: sessionResult.sessionId, // For frontend localStorage compatibility
-        userId: userId.toString(), // For frontend localStorage
-        userRole: role, // For frontend localStorage
-        expiry: expiresAtISO, // ISO string format
-        expiresAt: expiresAtTimestamp, // Unix timestamp for frontend localStorage
-        expiresIn: expiresInSeconds, // Seconds until expiry (for countdown)
-        expiresAtFormatted: expiresAt.toLocaleString() // Human-readable format for display
-      };
-      
-      console.log('Response data:', { 
-        hasToken: !!response.jwtToken, 
-        sessionId: response.sessionId, 
-        userId: response.userId,
-        expiresAt: response.expiresAtFormatted
+        sessionId: sessionResult.sessionId,
+        userId: userId.toString(),
+        userRole: role,
+        expiry: expiresAtISO,
+        expiresAt: expiresAtTimestamp,
+        expiresIn: expiresInSeconds,
+        expiresAtFormatted: expiresAt.toLocaleString()
       });
-      
-      return res.status(200).json(response);
     } catch (error) {
-      console.error('Login error:', error);
-      console.error('Error stack:', error.stack);
+      console.error('Login error:', error.message);
       return res.status(500).json({
         status: 'error',
-        message: 'Internal server error: ' + error.message,
+        message: 'Internal server error',
         statusCode: 500
       });
     }
@@ -152,17 +126,15 @@ class AuthController {
       const { valid, user, error } = await AuthService.validateCredentials(email, password, role);
 
       if (!valid) {
-        console.error('Invalid credentials in two-step login (credential_validation):', { email, role, step, error });
         return res.status(401).json({
           success: false,
           message: error || 'Invalid credentials',
           statusCode: 401,
-          nextStep: null // No next step if credentials invalid
+          nextStep: null
         });
       }
 
       // Credentials are valid - automatically send OTP
-      console.log('[AuthController] Credentials validated, automatically sending OTP...');
       const otpResult = await AuthService.generateAndSaveOTP(email, role, mobile || user.mobile_number);
 
       if (!otpResult.success) {
@@ -173,17 +145,16 @@ class AuthController {
         });
       }
 
-      // Return response indicating OTP was sent
       return res.status(200).json({
         success: true,
         message: `OTP sent to mobile number ${otpResult.mobile}. Please check your SMS.`,
-        otp: null, // Widget API generates OTP - we don't have it
+        otp: null,
         contactType: otpResult.contactType,
         contactInfo: otpResult.mobile,
         expiresAt: otpResult.expiresAt,
-        requestId: otpResult.requestId, // Include requestId for tracking
-        nextStep: 'final_login', // Indicate next step
-        requiresOtp: true // Frontend should show OTP field
+        requestId: otpResult.requestId,
+        nextStep: 'final_login',
+        requiresOtp: true
       });
     }
 
@@ -235,39 +206,27 @@ class AuthController {
         });
       }
 
-      
+      // Verify OTP (this already validates user identity)
       const { valid, user, error } = await AuthService.verifyOTP(email, role, otp);
 
       if (!valid) {
-        console.error(`[AuthController] OTP verification failed for ${email}:`, error);
         return res.status(401).json({
           success: false,
           message: error || 'Invalid OTP',
-          statusCode: 401,
-          error: error || 'OTP verification failed'
-        });
-      }
-      
-      console.log(`[AuthController] OTP verified successfully for ${email}, proceeding with login`);
-      // Also validate password (in case credentials changed) and update last_login
-      const credCheck = await AuthService.validateCredentials(email, password, role, true);
-      if (!credCheck.valid) {
-        return res.status(401).json({
-          success: false,
-          message: 'Invalid credentials',
           statusCode: 401
         });
       }
 
-      // Generate JWT token
+      // Generate JWT token and create session in parallel with last_login update
       const userId = AuthService.getUserId(user);
       const jwtToken = AuthService.generateJWT(userId, user.email, role);
-
-      // Calculate expiration (3 hours from now)
       const expiresAt = new Date(Date.now() + (3 * 60 * 60 * 1000));
 
-      // Create session
-      const sessionResult = await AuthService.createSession(userId, jwtToken, expiresAt, req);
+      // Create session and update last_login in parallel
+      const [sessionResult] = await Promise.all([
+        AuthService.createSession(userId, jwtToken, expiresAt, req),
+        AuthService.updateLastLoginAsync(userId) // Non-blocking update
+      ]);
 
       if (!sessionResult.success) {
         return res.status(500).json({
@@ -277,26 +236,26 @@ class AuthController {
         });
       }
 
-      // Calculate session expiry details for frontend display
+      // Calculate session expiry details
       const expiresAtISO = expiresAt.toISOString();
       const expiresAtTimestamp = expiresAt.getTime();
       const expiresInSeconds = Math.floor((expiresAtTimestamp - Date.now()) / 1000);
 
       return res.status(200).json({
-        status: 'success', // For frontend to recognize success
-        success: true, // For frontend to recognize success
-        statusCode: 200, // HTTP status code
+        status: 'success',
+        success: true,
+        statusCode: 200,
         message: 'Login successful',
         token: jwtToken,
-        jwtToken: jwtToken, // For frontend localStorage compatibility
+        jwtToken: jwtToken,
         session_id: sessionResult.sessionId,
-        sessionId: sessionResult.sessionId, // For frontend localStorage compatibility
-        userId: userId.toString(), // For frontend localStorage
-        userRole: role, // For frontend localStorage
-        expiry: expiresAtISO, // ISO string format
-        expiresAt: expiresAtTimestamp, // Unix timestamp for frontend localStorage
-        expiresIn: expiresInSeconds, // Seconds until expiry (for countdown)
-        expiresAtFormatted: expiresAt.toLocaleString() // Human-readable format for display
+        sessionId: sessionResult.sessionId,
+        userId: userId.toString(),
+        userRole: role,
+        expiry: expiresAtISO,
+        expiresAt: expiresAtTimestamp,
+        expiresIn: expiresInSeconds,
+        expiresAtFormatted: expiresAt.toLocaleString()
       });
     }
 

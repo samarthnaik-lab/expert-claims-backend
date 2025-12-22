@@ -19,22 +19,21 @@ const s3Client = new S3Client({
   }
 });
 
-// Supabase configuration
-const SUPABASE_URL = process.env.SUPABASE_URL ;
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+// Supabase configuration - Use service role key for private expc schema access
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 // Validate required environment variables
 if (!SUPABASE_KEY) {
-  console.error('ERROR: SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY must be set in environment variables');
+  console.error('ERROR: SUPABASE_SERVICE_ROLE_KEY must be set in environment variables for private schema access');
   process.exit(1);
 }
 
 const supabaseHeaders = {
   'apikey': SUPABASE_KEY,
   'Authorization': `Bearer ${SUPABASE_KEY}`,
-  // Schema name 'expc' usage commented out
-  // 'Accept-Profile': 'expc',
-  // 'Content-Profile': 'expc'
+  'Accept-Profile': 'expc',
+  'Content-Profile': 'expc'
 };
 
 // Helper: Validate user session

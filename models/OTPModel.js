@@ -33,14 +33,13 @@ class OTPModel {
 
   // Create a new OTP record
   static async create(otpData) {
-    // Generate otp_id if not provided
-    if (!otpData.otp_id) {
-      otpData.otp_id = await this.generateOtpId();
-    }
+    // Remove otp_id from data if present - let database auto-generate it
+    // otp_id is likely a SERIAL/BIGSERIAL column that auto-increments
+    const { otp_id, ...dataToInsert } = otpData;
 
     const { data, error } = await supabase
       .from('user_otp')
-      .insert([otpData])
+      .insert([dataToInsert])
       .select()
       .single();
 

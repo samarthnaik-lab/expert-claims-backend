@@ -30,50 +30,23 @@ class AuthService {
       return false;
     }
 
-    // Check if stored password is a bcrypt hash format (starts with $2a$, $2b$, or $2y$)
+    // Check if stored password is a bcrypt hash format
     if (storedPassword.startsWith('$2a$') || storedPassword.startsWith('$2b$') || storedPassword.startsWith('$2y$')) {
       // Check if input is also a hash format (legacy fake hash from frontend)
       if (inputPassword.startsWith('$2a$') || inputPassword.startsWith('$2b$') || inputPassword.startsWith('$2y$')) {
-        // Both are hash format - could be fake hashes or real bcrypt hashes
-        // Try bcrypt comparison first (in case both are real bcrypt hashes - shouldn't happen but handle it)
-        // If that fails, compare directly (for fake hashes)
-        try {
-          // Note: bcrypt.compare with two hashes won't work, but try anyway
-          // Real bcrypt hashes can't be compared directly - need plain password
-          // So if both are hashes, they're likely fake hashes - compare directly
-          if (inputPassword === storedPassword) {
-            // Check if it's a fake hash (fake hashes have predictable patterns)
-            const isFakeHash = storedPassword.length < 60 || !storedPassword.match(/^\$2[ab]\$10\$[A-Za-z0-9./]{53}$/);
-            if (isFakeHash) {
-              console.warn('Using legacy fake hash comparison - should migrate to proper bcrypt');
-            }
-            return true;
-          }
-          return false;
-        } catch (error) {
-          // If comparison fails, return false
-          return false;
-        }
+        // Both are hash format - compare directly (for fake hashes)
+        return inputPassword === storedPassword;
       } else {
         // Input is plain password, stored is hash - use proper bcrypt.compare
         try {
-          const result = await bcrypt.compare(inputPassword, storedPassword);
-          if (result) {
-            console.log('Password verified using bcrypt.compare');
-          }
-          return result;
+          return await bcrypt.compare(inputPassword, storedPassword);
         } catch (error) {
-          console.error('Bcrypt comparison error:', error);
-          // If bcrypt comparison fails, it might be a fake hash stored in DB
-          // Try comparing as strings (for fake hash migration)
           return false;
         }
       }
     }
     
     // Legacy: plain text comparison (for migration period only)
-    // This allows existing plain text passwords to work during transition
-    console.warn('Using plain text password comparison - should migrate to bcrypt');
     return inputPassword === storedPassword;
   }
 
@@ -89,8 +62,6 @@ class AuthService {
 
   static async validateCredentials(email, password, role, updateLastLogin = false) {
     try {
-      console.log('Validating credentials:', { email, role, hasPassword: !!password });
-      
       // Validate input parameters
       if (!email || !password || !role) {
         return { valid: false, user: null, error: 'Email, password, and role are required' };
@@ -100,69 +71,47 @@ class AuthService {
       const { data: user, error } = await UserModel.findByEmailAndRole(email, role);
 
       if (error) {
-        // Check if it's a "no rows" error (PGRST116) vs actual database error
         if (error.code === 'PGRST116' || error.message?.includes('0 rows')) {
-          console.error('User not found:', { email, role });
           return { valid: false, user: null, error: 'Invalid email or role' };
         }
-        console.error('Database error finding user:', error);
         return { valid: false, user: null, error: 'Database error occurred. Please try again.' };
       }
 
       if (!user) {
-        console.error('User not found:', { email, role });
-        // Log failed login attempt (user doesn't exist)
         return { valid: false, user: null, error: 'Invalid email or role' };
       }
 
-      // Note: deleted_flag check is now handled in UserModel.findByEmailAndRole
-      // But we keep this as a safety check
       if (user.deleted_flag === true) {
-        console.error('Attempted login with deleted user:', { userId: user.user_id, email });
         return { valid: false, user: null, error: 'Account not found' };
       }
 
-      console.log('User found:', { userId: user.user_id, email: user.email });
-
       // Check password
-      // Note: If frontend sends bcrypt hash, we compare hashes directly (legacy)
-      // If frontend sends plain password, we use bcrypt.compare (recommended)
       const passwordMatch = await this.verifyPassword(password, user.password_hash);
-      
-      console.log('Password verification result:', passwordMatch ? 'MATCH' : 'NO MATCH');
 
       if (!passwordMatch) {
-        console.error('Password mismatch for user:', user.user_id);
-        // Log failed login attempt
-        try {
-          await UserModel.incrementFailedLoginAttempts(user.user_id);
-        } catch (logError) {
-          console.error('Failed to log failed login attempt:', logError);
-        }
+        // Log failed login attempt (non-blocking)
+        UserModel.incrementFailedLoginAttempts(user.user_id).catch(() => {});
         return { valid: false, user: null, error: 'Invalid password' };
       }
 
-      // Update last_login timestamp if requested
+      // Update last_login timestamp if requested (non-blocking)
       if (updateLastLogin) {
-        try {
-          const { error: updateError } = await UserModel.updateLastLogin(user.user_id);
-          if (updateError) {
-            console.error('Failed to update last_login:', updateError);
-            // Don't fail login if last_login update fails, just log it
-          } else {
-            console.log('Last login updated for user:', user.user_id);
-          }
-        } catch (error) {
-          console.error('Error updating last_login:', error);
-          // Continue with login even if last_login update fails
-        }
+        UserModel.updateLastLogin(user.user_id).catch(() => {});
       }
 
-      console.log('Credentials validated successfully');
       return { valid: true, user, error: null };
     } catch (error) {
-      console.error('Error in validateCredentials:', error);
+      console.error('Error in validateCredentials:', error.message);
       return { valid: false, user: null, error: 'An error occurred during validation. Please try again.' };
+    }
+  }
+
+  // Non-blocking last login update
+  static async updateLastLoginAsync(userId) {
+    try {
+      await UserModel.updateLastLogin(userId);
+    } catch (error) {
+      // Silently fail - don't block login
     }
   }
 
@@ -214,41 +163,16 @@ class AuthService {
         identifier: cleanMobile
       };
 
-      console.log(`[MSG91 Widget] Sending OTP request to ${cleanMobile}`);
-
       const response = await axios.post('https://api.msg91.com/api/v5/widget/sendOtp', requestBody, {
         headers: {
           'Content-Type': 'application/json',
           'authkey': msg91ApiKey
-        }
+        },
+        timeout: 5000 // 5 second timeout for faster failure
       });
-
-      // Log the full response to understand what msg91 returns
-      console.log(`[MSG91 Widget] sendOtp Response:`, {
-        status: response.status,
-        statusText: response.statusText,
-        fullResponse: JSON.stringify(response.data, null, 2),
-        dataType: typeof response.data,
-        dataKeys: response.data ? Object.keys(response.data) : [],
-        headers: response.headers ? Object.keys(response.headers) : [],
-        fullHeaders: response.headers
-      });
-      
-      // Also check if reqId might be in headers
-      if (response.headers) {
-        console.log(`[MSG91 Widget] Checking headers for reqId/requestId:`, {
-          'x-request-id': response.headers['x-request-id'],
-          'request-id': response.headers['request-id'],
-          'x-req-id': response.headers['x-req-id']
-        });
-      }
 
       if (response.data && response.data.type === 'success') {
-        // msg91 widget API returns reqId in the "message" field!
-        // The message field contains the reqId (hex string like "356c7268306d333932333833")
         const reqId = response.data.message || null;
-        
-        // Also try other possible field names (for compatibility)
         const requestId = reqId || 
                          response.data.requestId || 
                          response.data.request_id || 
@@ -257,38 +181,13 @@ class AuthService {
                          response.data.id ||
                          null;
         
-        // Log what we extracted
-        console.log(`[MSG91 Widget] Response extraction:`, {
-          'response.data.message': response.data.message,
-          'response.data.requestId': response.data.requestId,
-          'response.data.request_id': response.data.request_id,
-          'response.data.reqId': response.data.reqId,
-          'response.data.req_id': response.data.req_id,
-          'response.data.id': response.data.id,
-          'Final reqId (from message)': reqId,
-          'Final requestId': requestId
-        });
-        
-        // Store all relevant response data
-        const responseData = {
-          requestId: requestId, // Store reqId as requestId in database
-          reqId: reqId, // Also store as reqId for clarity
-          message: response.data.message, // Original message field
-          type: response.data.type,
-          fullResponse: response.data // Store full response for reference
-        };
-        
-        console.log(`[MSG91 Widget] OTP sent successfully. Extracted data:`, responseData);
-        
         if (!reqId) {
-          console.error('[MSG91 Widget] ERROR: reqId (message field) is null in response. Cannot proceed.');
           return { success: false, error: 'Failed to get reqId from msg91 response' };
         }
         
-        return { success: true, requestId: reqId, responseData };
+        return { success: true, requestId: reqId };
       } else {
-        console.error('[MSG91 Widget] API error:', response.data);
-        return { success: false, error: response.data.message || 'Failed to send OTP', responseData: response.data };
+        return { success: false, error: response.data?.message || 'Failed to send OTP' };
       }
     } catch (error) {
       console.error('[MSG91 Widget] Error:', error.response?.data || error.message);
@@ -360,47 +259,21 @@ class AuthService {
         reqId: reqId // msg91 REQUIRES this field - must come from sendOtp response
       };
 
-      console.log(`[MSG91 Widget] Verifying OTP:`, {
-        widgetId: widgetId,
-        identifier: identifier,
-        otp: otpCode,
-        requestId: requestId,
-        mobileNumber: mobileNumber
-      });
-
       const response = await axios.post('https://api.msg91.com/api/v5/widget/verifyOtp', requestBody, {
         headers: {
           'Content-Type': 'application/json',
           'authkey': msg91ApiKey
-        }
-      });
-
-      console.log(`[MSG91 Widget] Verification response:`, {
-        status: response.status,
-        statusText: response.statusText,
-        data: response.data
+        },
+        timeout: 5000 // 5 second timeout for faster failure
       });
 
       if (response.data && response.data.type === 'success') {
-        console.log(`[MSG91 Widget] OTP verified successfully`);
         return { valid: true };
       } else {
         const errorMsg = response.data?.message || response.data?.error || 'Invalid OTP';
-        console.error('[MSG91 Widget] OTP verification failed:', {
-          response: response.data,
-          message: errorMsg
-        });
         return { valid: false, error: errorMsg };
       }
     } catch (error) {
-      const errorDetails = {
-        message: error.message,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        data: error.response?.data
-      };
-      console.error('[MSG91 Widget] Verification error:', errorDetails);
-      
       const errorMsg = error.response?.data?.message || 
                       error.response?.data?.error || 
                       error.message || 
@@ -449,15 +322,11 @@ class AuthService {
     const formattedMobile = this.formatMobileNumber(mobileNumber);
     
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes expiry
-    
-    console.log(`[MSG91 Widget] Requesting OTP for user ${user.user_id} (${email}) - Original: ${originalMobileNumber}, Formatted for msg91: ${formattedMobile}`);
 
-    // Send OTP request via msg91 Widget API (widget generates OTP)
-    // Use formatted mobile number (with +91) for msg91 API
+    // Send OTP request via msg91 Widget API
     const sendResult = await this.sendOTP(formattedMobile);
     
     if (!sendResult.success) {
-      console.error('[MSG91 Widget] Failed to send OTP:', sendResult.error);
       return { 
         success: false, 
         error: sendResult.error || 'Failed to send OTP. Please try again.' 
@@ -465,16 +334,13 @@ class AuthService {
     }
 
     // Prepare OTP metadata for database
-    // From sendOtp API response, we receive:
-    // - requestId (required for verifyOtp) - comes from message field
-    // - message (contains reqId)
-    // - type: 'success'
-    // The actual OTP code is generated by msg91 and sent to user - we don't receive it
-    
+    // Note: otp_code is set to '000000' initially since msg91 Widget API generates OTP
+    // It will be updated when user enters the OTP code
+    // Using '000000' as placeholder (6 chars max) - actual OTP will replace it
     const otpData = {
       user_id: user.user_id,
-      mobile_number: originalMobileNumber, // Store WITHOUT +91 extension (original format)
-      otp_code: null, // Widget API generates OTP - we don't receive it in response, will be stored when user enters it
+      mobile_number: originalMobileNumber,
+      otp_code: '000000', // Placeholder (6 chars) - will be updated when user enters OTP
       purpose: 'login',
       expires_at: expiresAt.toISOString(),
       is_used: false,
@@ -482,29 +348,20 @@ class AuthService {
       max_attempts: 3,
       created_by: user.user_id.toString(),
       created_time: new Date().toISOString(),
-      requestId: sendResult.requestId || null // requestId from sendOtp response (required for verifyOtp)
+      requestId: sendResult.requestId || null
     };
 
     // Save OTP metadata to database
-    console.log(`[MSG91 Widget] Saving OTP metadata to database:`, {
-      requestId: sendResult.requestId,
-      mobile_number: formattedMobile,
-      user_id: user.user_id,
-      fullOtpData: otpData
-    });
     const { data: otpRecord, error: otpError } = await OTPModel.create(otpData);
 
     if (otpError) {
-      console.error('[MSG91 Widget] Failed to save OTP metadata:', otpError);
-      return { success: false, error: 'Failed to save OTP metadata: ' + (otpError.message || JSON.stringify(otpError)) };
+      return { success: false, error: 'Failed to save OTP metadata: ' + (otpError.message || 'Unknown error') };
     }
-
-    console.log(`[MSG91 Widget] OTP request sent successfully. RequestId: ${sendResult.requestId}, OTP ID: ${otpRecord?.otp_id}`);
 
     return { 
       success: true, 
-      otp: null, // Widget API generates OTP - we don't know it
-      mobile: originalMobileNumber, // Return original mobile (without extension) for display
+      otp: null,
+      mobile: originalMobileNumber,
       contactType: 'mobile',
       expiresAt: expiresAt.toISOString(),
       requestId: sendResult.requestId
@@ -512,80 +369,41 @@ class AuthService {
   }
 
   static async verifyOTP(email, role, otpCode) {
-    console.log(`[OTP Verify] Starting verification for ${email}, role: ${role}, OTP: ${otpCode}`);
-    
     const { data: user, error: userError } = await UserModel.findByEmailAndRole(email, role);
 
     if (userError || !user) {
-      console.error(`[OTP Verify] User not found:`, userError);
       return { valid: false, error: 'User not found' };
     }
-
-    console.log(`[OTP Verify] User found: ${user.user_id}, mobile: ${user.mobile_number}`);
 
     // Get the active OTP record to get requestId
     const { data: activeOTP, error: otpRecordError } = await OTPModel.findActiveOTP(user.user_id, 'login');
 
-    if (otpRecordError) {
-      console.error(`[OTP Verify] Error finding OTP record:`, otpRecordError);
-    }
-
-    if (!activeOTP) {
-      console.error(`[OTP Verify] No active OTP found for user ${user.user_id}`);
+    if (otpRecordError || !activeOTP) {
       return { valid: false, error: 'OTP request not found or expired. Please request a new OTP.' };
     }
 
-    console.log(`[OTP Verify] Found OTP record:`, {
-      otp_id: activeOTP.otp_id,
-      requestId: activeOTP.requestId,
-      mobile_number: activeOTP.mobile_number,
-      is_used: activeOTP.is_used,
-      expires_at: activeOTP.expires_at
-    });
-
-    // requestId (reqId) is REQUIRED for verifyOtp API
-    // It comes from the message field in sendOtp response
     if (!activeOTP.requestId) {
-      console.error(`[OTP Verify] ERROR: requestId (reqId) is required for verifyOtp but is null in OTP record.`);
       return { valid: false, error: 'OTP verification failed: Missing request ID. Please request a new OTP.' };
     }
 
-    // Get mobile number from OTP record (stored WITHOUT +91 extension)
-    // Format it with +91 for msg91 API (same format as sendOtp)
+    // Get mobile number and format it for msg91 API
     const originalMobileNumber = activeOTP.mobile_number || user.mobile_number;
     const mobileForVerification = this.formatMobileNumber(originalMobileNumber);
     
-    console.log(`[OTP Verify] Mobile from DB: ${originalMobileNumber}, Formatted for msg91: ${mobileForVerification}`);
-    
-    // Store the user-entered OTP in the database row
-    console.log(`[OTP Verify] Storing user-entered OTP '${otpCode}' in database row ${activeOTP.otp_id}...`);
-    const updateError = await OTPModel.updateOTPCode(activeOTP.otp_id, otpCode);
-    if (updateError.error) {
-      console.warn(`[OTP Verify] Failed to update OTP code in database (non-critical):`, updateError.error);
-    }
-    
-    // Verify OTP using msg91 Widget API
-    // verifyOtp request body requires:
-    // - widgetId (from env)
-    // - identifier (mobile_number with +91 - same format as sendOtp)
-    // - otp (user-entered OTP code)
-    // - reqId (from requestId stored in database)
-    const verifyResult = await this.verifyOTPWithMsg91(
-      mobileForVerification, // Use formatted number (with +91) for msg91
-      otpCode, 
-      activeOTP.requestId // reqId for verifyOtp request
-    );
+    // Store OTP code and verify in parallel
+    const [updateResult, verifyResult] = await Promise.all([
+      OTPModel.updateOTPCode(activeOTP.otp_id, otpCode).catch(() => ({ error: null })), // Non-blocking
+      this.verifyOTPWithMsg91(mobileForVerification, otpCode, activeOTP.requestId)
+    ]);
 
     if (!verifyResult.valid) {
-      console.error(`[OTP Verify] msg91 verification failed:`, verifyResult.error);
-      // Increment attempts
-      await OTPModel.incrementAttempts(activeOTP.otp_id);
+      // Increment attempts (non-blocking)
+      OTPModel.incrementAttempts(activeOTP.otp_id).catch(() => {});
       return { valid: false, error: verifyResult.error || 'Invalid OTP' };
     }
 
-    console.log(`[OTP Verify] OTP verified successfully, marking as used`);
-    // Mark OTP as used in our database
-    await OTPModel.markAsUsed(activeOTP.otp_id);
+    // Mark OTP as used (non-blocking)
+    OTPModel.markAsUsed(activeOTP.otp_id).catch(() => {});
 
     return { valid: true, user, error: null };
   }
@@ -728,10 +546,13 @@ class AuthService {
       }
       
       // Prepare OTP metadata for database
+      // Note: otp_code is set to '000000' initially since msg91 Widget API generates OTP
+      // It will be updated when user enters the OTP code
+      // Using '000000' as placeholder (6 chars max) - actual OTP will replace it
       const otpData = {
         user_id: customer.user_id,
         mobile_number: cleanMobile, // Store WITHOUT +91 extension
-        otp_code: null, // Widget API generates OTP - we don't receive it
+        otp_code: '000000', // Placeholder (6 chars) - will be updated when user enters OTP
         purpose: 'login',
         expires_at: expiresAt.toISOString(),
         is_used: false,
