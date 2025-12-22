@@ -12,16 +12,18 @@ const s3Client = new S3Client({
   }
 });
 
-// Supabase configuration
+// Supabase configuration - Use service role key for private expc schema access
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://wrbnlvgecznyqelryjeq.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
 
 const supabaseHeaders = {
   'apikey': SUPABASE_KEY,
   'Authorization': `Bearer ${SUPABASE_KEY}`,
   'Accept': 'application/json',
   'Content-Type': 'application/json',
-  'Prefer': 'return=representation'
+  'Prefer': 'return=representation',
+  'Accept-Profile': 'expc',
+  'Content-Profile': 'expc' // Required for POST/PUT/PATCH operations
 };
 
 class DocumentController {
@@ -62,11 +64,6 @@ class DocumentController {
   // Helper: Get case details
   static async getCaseDetails(caseId) {
     try {
-      // Use axios with Accept-Profile header to access expc schema
-      console.log('[DocumentController] Making axios request to:', `${SUPABASE_URL}/rest/v1/cases`);
-      console.log('[DocumentController] Headers:', JSON.stringify(supabaseHeaders, null, 2));
-      console.log('[DocumentController] Params:', { case_id: `eq.${caseId}`, deleted_flag: 'eq.false', select: '*' });
-      
       const response = await axios.get(
         `${SUPABASE_URL}/rest/v1/cases`,
         {
@@ -79,11 +76,7 @@ class DocumentController {
         }
       );
       
-      console.log('[DocumentController] Response status:', response.status);
-      console.log('[DocumentController] Response data length:', response.data?.length);
-      
       if (response.data && response.data.length > 0) {
-        console.log('[DocumentController] Case found:', response.data[0].case_id);
         return response.data[0];
       }
       
@@ -95,17 +88,11 @@ class DocumentController {
       
       return null;
     } catch (error) {
-      console.error('[DocumentController] Axios error:', error.message);
-      console.error('[DocumentController] Error response:', error.response?.data);
-      console.error('[DocumentController] Error status:', error.response?.status);
-      
       logger.logError(error, null, {
         errorType: 'GetCaseDetailsError',
         message: error.message,
         caseId: caseId,
-        status: error.response?.status,
-        statusText: error.response?.statusText,
-        responseData: error.response?.data
+        status: error.response?.status
       });
       return null;
     }
@@ -247,8 +234,6 @@ class DocumentController {
   // Helper: Save document metadata to database
   static async saveDocumentMetadata(data) {
     try {
-      console.log('[DocumentController] Saving metadata:', JSON.stringify(data, null, 2));
-      
       const response = await axios.post(
         `${SUPABASE_URL}/rest/v1/case_documents`,
         data,
@@ -260,20 +245,28 @@ class DocumentController {
         }
       );
       
-      console.log('[DocumentController] Metadata saved successfully:', response.data);
       return { success: true, data: response.data };
     } catch (error) {
-      console.error('[DocumentController] Save metadata error response:', error.response?.data);
-      console.error('[DocumentController] Save metadata error status:', error.response?.status);
-      console.error('[DocumentController] Full error:', error);
+      // Extract detailed error message from Supabase/PostgREST response
+      const errorDetails = error.response?.data || {};
+      const errorMessage = errorDetails.message || errorDetails.hint || error.message;
+      const errorCode = errorDetails.code || 'UNKNOWN_ERROR';
       
       logger.logError(error, null, {
         errorType: 'SaveDocumentMetadataError',
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status
+        message: errorMessage,
+        errorCode: errorCode,
+        caseId: data.case_id,
+        status: error.response?.status,
+        details: errorDetails.details
       });
-      return { success: false, error: error.message };
+      
+      return { 
+        success: false, 
+        error: errorMessage,
+        errorCode: errorCode,
+        details: errorDetails
+      };
     }
   }
 
@@ -360,26 +353,11 @@ class DocumentController {
         });
       }
 
-      // Step 9: Get next document_id (required primary key)
-      const maxDocResponse = await axios.get(
-        `${SUPABASE_URL}/rest/v1/case_documents`,
-        {
-          params: {
-            select: 'document_id',
-            order: 'document_id.desc',
-            limit: 1
-          },
-          headers: supabaseHeaders
-        }
-      );
-      
-      const nextDocumentId = maxDocResponse.data && maxDocResponse.data.length > 0 
-        ? maxDocResponse.data[0].document_id + 1 
-        : 1;
-
-      // Step 10: Save metadata to database
+      // Step 9: Save metadata to database
+      // Note: document_id is GENERATED ALWAYS (auto-incrementing), so we don't set it manually
+      // uploaded_by is NOT NULL, so we need to provide a value - use system user (1) if not authenticated
       const metadata = {
-        document_id: nextDocumentId, // Required primary key
+        // document_id is auto-generated by database - don't include it
         case_id,
         category_id: parseInt(category_id), // Ensure it's a number
         original_filename: file.originalname,
@@ -388,7 +366,7 @@ class DocumentController {
         file_size: file.size,
         file_type: file.originalname.split('.').pop(),
         mime_type: file.mimetype,
-        uploaded_by: userId, // Can be null if no authentication
+        uploaded_by: userId || 1, // Use system user (1) as fallback if not authenticated
         upload_time: new Date().toISOString(), // Required timestamp
         version_number: versionNumber,
         is_customer_visible: is_customer_visible === 'true' || is_customer_visible === true,
@@ -399,10 +377,16 @@ class DocumentController {
       const saveResult = await DocumentController.saveDocumentMetadata(metadata);
 
       if (!saveResult.success) {
-        return res.status(500).json({
+        // Return appropriate status code based on error
+        const statusCode = saveResult.errorCode === 'PGRST205' ? 404 : 
+                          saveResult.errorCode === '428C9' ? 400 : 500;
+        
+        return res.status(statusCode).json({
           success: false,
-          error: `Database save failed: ${saveResult.error}`,
-          statusCode: 500
+          error: saveResult.error || 'Database save failed',
+          error_code: saveResult.errorCode,
+          details: saveResult.details,
+          statusCode: statusCode
         });
       }
 
