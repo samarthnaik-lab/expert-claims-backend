@@ -1936,8 +1936,173 @@ class SupportController {
     }
   }
 
+  // Helper: Download file from S3 (similar to partnerDocumentView.js)
+  static async downloadFromS3(bucketName, filePath) {
+    try {
+      const command = new GetObjectCommand({
+        Bucket: bucketName,
+        Key: filePath
+      });
+      const response = await s3Client.send(command);
+      
+      // Convert stream to buffer
+      const chunks = [];
+      for await (const chunk of response.Body) {
+        chunks.push(chunk);
+      }
+      const buffer = Buffer.concat(chunks);
+      return {
+        success: true,
+        buffer,
+        contentType: response.ContentType,
+        contentLength: response.ContentLength
+      };
+    } catch (error) {
+      console.error('[Support] S3 download error:', error.message);
+      return {
+        success: false,
+        error: error.message
+      };
+    }
+  }
+
+  // Helper: Build bucket name from case type
+  static buildBucketName(caseTypeName) {
+    const safeCaseType = caseTypeName
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '-');
+    
+    return `expc-${safeCaseType}`;
+  }
+
+  // Helper: Get case document details
+  static async getCaseDocumentDetails(documentId) {
+    try {
+      const { data: document, error } = await supabase
+        .from('case_documents')
+        .select('document_id, case_id, file_path')
+        .eq('document_id', documentId)
+        .eq('deleted_flag', false)
+        .maybeSingle();
+
+      if (error || !document) {
+        return null;
+      }
+      return document;
+    } catch (error) {
+      console.error('[Support] Get case document details error:', error.message);
+      return null;
+    }
+  }
+
+  // Helper: Get case details with case type
+  static async getCaseDetailsWithType(caseId) {
+    try {
+      const { data: caseData, error: caseError } = await supabase
+        .from('cases')
+        .select('case_id, case_type_id')
+        .eq('case_id', caseId)
+        .eq('deleted_flag', false)
+        .maybeSingle();
+
+      if (caseError || !caseData || !caseData.case_type_id) {
+        return null;
+      }
+
+      // Get case type name
+      const { data: caseType, error: typeError } = await supabase
+        .from('case_types')
+        .select('case_type_name')
+        .eq('case_type_id', caseData.case_type_id)
+        .maybeSingle();
+
+      if (typeError || !caseType) {
+        return null;
+      }
+
+      return {
+        case_id: caseData.case_id,
+        case_type_id: caseData.case_type_id,
+        case_types: {
+          case_type_name: caseType.case_type_name
+        }
+      };
+    } catch (error) {
+      console.error('[Support] Get case details error:', error.message);
+      return null;
+    }
+  }
+
+  // POST /support/view-case-document
+  // View/Download case document from S3 (similar to partnerDocumentView.js)
+  static async viewCaseDocument(req, res) {
+    try {
+      const { document_id } = req.body;
+
+      if (!document_id) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing document_id in request body'
+        });
+      }
+
+      // Step 1: Get case document details
+      const documentDetails = await SupportController.getCaseDocumentDetails(document_id);
+      
+      if (!documentDetails) {
+        return res.status(404).json({
+          success: false,
+          error: 'Document not found'
+        });
+      }
+
+      // Step 2: Get case details with case type
+      const caseDetails = await SupportController.getCaseDetailsWithType(documentDetails.case_id);
+      if (!caseDetails || !caseDetails.case_types) {
+        return res.status(404).json({
+          success: false,
+          error: 'Case details not found'
+        });
+      }
+
+      // Step 3: Build bucket name
+      const bucketName = SupportController.buildBucketName(caseDetails.case_types.case_type_name);
+
+      // Step 4: Download file from S3
+      const downloadResult = await SupportController.downloadFromS3(
+        bucketName,
+        documentDetails.file_path
+      );
+
+      if (!downloadResult.success) {
+        return res.status(500).json({
+          success: false,
+          error: `Failed to download file: ${downloadResult.error}`
+        });
+      }
+
+      // Step 5: Return file as binary response
+      const filename = documentDetails.file_path.split('/').pop();
+      
+      res.set({
+        'Content-Type': downloadResult.contentType || 'application/octet-stream',
+        'Content-Length': downloadResult.contentLength,
+        'Content-Disposition': `inline; filename="${filename}"`,
+        'Cache-Control': 'no-cache'
+      });
+      return res.status(200).send(downloadResult.buffer);
+    } catch (error) {
+      console.error('[Support] View case document error:', error);
+      return res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+
   // POST /support/view
-  // View case document by document_id
+  // View/Download case document from S3 (similar to partnerDocumentView.js)
   static async viewDocument(req, res) {
     try {
       const { document_id } = req.body;
@@ -1953,58 +2118,40 @@ class SupportController {
 
       console.log(`[View Document] Fetching case document_id: ${document_id}`);
 
-      // Step 1: Get document from case_documents table
-      const { data: document, error: docError } = await supabase
-        .from('case_documents')
-        .select(`
-          *,
-          cases!case_documents_case_id_fkey(
-            case_id,
-            case_type_id
-          )
-        `)
-        .eq('document_id', document_id)
-        .eq('deleted_flag', false)
-        .maybeSingle();
+      // Step 1: Get case document details
+      const documentDetails = await SupportController.getCaseDocumentDetails(document_id);
 
-      if (docError || !document) {
-        console.error('[View Document] Document not found:', docError);
+      if (!documentDetails) {
         return res.status(404).json({
           status: 'error',
           message: 'Document not found',
+          error_code: 'DOCUMENT_NOT_FOUND',
           statusCode: 404
         });
       }
 
-      console.log(`[View Document] Found document: file_path=${document.file_path}`);
+      console.log(`[View Document] Found document: file_path=${documentDetails.file_path}`);
 
-      // Step 2: Get case_type_name
-      let caseTypeName = null;
-      if (document.cases && document.cases.case_type_id) {
-        const { data: caseType, error: caseError } = await supabase
-          .from('case_types')
-          .select('case_type_name')
-          .eq('case_type_id', document.cases.case_type_id)
-          .maybeSingle();
-
-        if (!caseError && caseType) {
-          caseTypeName = caseType.case_type_name;
-        }
+      // Step 2: Get case details with case type
+      const caseDetails = await SupportController.getCaseDetailsWithType(documentDetails.case_id);
+      if (!caseDetails || !caseDetails.case_types) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Case details not found',
+          error_code: 'CASE_NOT_FOUND',
+          statusCode: 404
+        });
       }
 
-      // Step 3: Construct bucket name
-      let bucketName = 'case-documents'; // Default fallback bucket
-      if (caseTypeName) {
-        bucketName = `expc-${caseTypeName.trim().toLowerCase().replace(/\s+/g, '-')}`;
-      }
+      // Step 3: Build bucket name
+      const bucketName = SupportController.buildBucketName(caseDetails.case_types.case_type_name);
       console.log(`[View Document] Using bucket: ${bucketName}`);
+      console.log(`[View Document] Original file_path: ${documentDetails.file_path}`);
 
-      // Step 4: Extract file path
-      let storagePath = document.file_path;
+      // Step 4: Extract and normalize storage path
+      let storagePath = documentDetails.file_path;
       
-      console.log(`[View Document] Original file_path: ${storagePath}`);
-      
-      // If it's a full URL, extract just the path
+      // If it's a full URL (Supabase storage URL), extract just the path
       if (storagePath && storagePath.includes('/storage/v1/object/public/')) {
         const parts = storagePath.split('/storage/v1/object/public/');
         if (parts.length > 1) {
@@ -2016,68 +2163,64 @@ class SupportController {
             storagePath = parts[1];
           }
         }
+      } else if (storagePath && storagePath.startsWith('case-')) {
+        // Already in correct format: case-ECSI-GA-25-086/filename.pdf
+        storagePath = storagePath;
       } else if (storagePath && storagePath.includes(bucketName + '/')) {
         // If path contains bucket name, remove it
         storagePath = storagePath.split(bucketName + '/')[1] || storagePath;
+      } else if (storagePath && storagePath.includes('/')) {
+        // If path starts with bucket name pattern, try to remove it
+        const pathParts = storagePath.split('/');
+        if (pathParts[0].startsWith('expc-') || pathParts[0].startsWith('public-')) {
+          storagePath = pathParts.slice(1).join('/');
+        }
       }
 
-      console.log(`[View Document] Extracted storage path: ${storagePath}`);
+      console.log(`[View Document] Normalized storage path: ${storagePath}`);
 
-      // Step 5: Check if file_path is a Supabase URL or S3 path
-      const isSupabaseUrl = document.file_path && document.file_path.includes('/storage/v1/object/public/');
-      const isS3Path = !isSupabaseUrl && storagePath && !storagePath.startsWith('http');
-
-      if (isS3Path) {
-        // File is stored in S3 - generate presigned URL
-        console.log('[View Document] Detected S3 path, generating presigned URL');
-        
+      // Step 5: Try to download from S3 first, then fallback to Supabase storage
+      let downloadResult;
+      
+      // Try S3 download
         try {
           const command = new GetObjectCommand({
             Bucket: bucketName,
             Key: storagePath
           });
+        const response = await s3Client.send(command);
           
-          const presignedUrl = await getSignedUrl(s3Client, command, { expiresIn: 3600 });
-          
-          // Return JSON response with URL for frontend to use
-          return res.status(200).json({
-            success: true,
-            url: presignedUrl,
-            document_url: presignedUrl, // Alternative field name
-            image_url: presignedUrl, // Alternative field name
-            file_url: presignedUrl, // Alternative field name
-            document_id: document.document_id,
-            file_path: storagePath,
-            expires_in: 3600,
-            statusCode: 200
-          });
-        } catch (s3Error) {
-          console.error('[View Document] S3 presigned URL error:', s3Error.message);
-          return res.status(500).json({
-            status: 'error',
-            message: `Failed to generate S3 view URL: ${s3Error.message}`,
-            error_code: 'S3_URL_GENERATION_ERROR',
-            statusCode: 500
-          });
+        // Convert stream to buffer
+        const chunks = [];
+        for await (const chunk of response.Body) {
+          chunks.push(chunk);
         }
-      }
-
-      // File is in Supabase Storage - download from storage
-      console.log('[View Document] Detected Supabase Storage URL, downloading from storage');
-      
+        const buffer = Buffer.concat(chunks);
+        downloadResult = {
+            success: true,
+          buffer,
+          contentType: response.ContentType,
+          contentLength: response.ContentLength,
+          source: 'S3'
+        };
+        console.log(`[View Document] ✓ File found in S3 bucket: ${bucketName}`);
+        } catch (s3Error) {
+        console.log(`[View Document] ✗ S3 download failed: ${s3Error.message}, trying Supabase storage...`);
+        
+        // Fallback to Supabase storage
       const bucketVariations = [
         bucketName, // expc-{case_type_name}
+          `public-${caseDetails.case_types.case_type_name.trim().toLowerCase().replace(/\s+/g, '-')}`, // public-{case_type_name}
         'case-documents', // Fallback bucket
-        'public-fire', // Common bucket
-        'expc-general' // General bucket
+          'public-fire' // Common bucket
       ];
 
       let fileData = null;
-      let downloadError = null;
       let usedBucket = null;
 
       for (const bucket of bucketVariations) {
-        console.log(`[View Document] Trying bucket: ${bucket}`);
+          console.log(`[View Document] Trying Supabase bucket: ${bucket}`);
+          try {
         const { data, error } = await supabase.storage
           .from(bucket)
           .download(storagePath);
@@ -2085,35 +2228,54 @@ class SupportController {
         if (!error && data) {
           fileData = data;
           usedBucket = bucket;
-          console.log(`[View Document] ✓ File found in bucket: ${bucket}`);
+              console.log(`[View Document] ✓ File found in Supabase bucket: ${bucket}`);
           break;
         } else {
           console.log(`[View Document] ✗ Not found in bucket: ${bucket}, error: ${error?.message}`);
-          downloadError = error;
+            }
+          } catch (supabaseError) {
+            console.log(`[View Document] ✗ Supabase error for bucket ${bucket}: ${supabaseError.message}`);
         }
       }
 
-      if (!fileData) {
-        console.error('[View Document] File not found in any bucket');
-        console.error('[View Document] Tried buckets:', bucketVariations);
-        console.error('[View Document] Storage path:', storagePath);
-        return res.status(404).json({
-          status: 'error',
-          message: 'File not found in storage',
-          details: {
+        if (fileData) {
+          const arrayBuffer = await fileData.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          downloadResult = {
+            success: true,
+            buffer,
+            contentType: null, // Will be determined from extension
+            contentLength: buffer.length,
+            source: 'Supabase'
+          };
+        } else {
+          downloadResult = {
+            success: false,
+            error: `File not found in S3 or Supabase storage. S3 error: ${s3Error.message}`,
             tried_buckets: bucketVariations,
             storage_path: storagePath
-          },
-          statusCode: 404
+          };
+        }
+      }
+
+      if (!downloadResult.success) {
+        return res.status(404).json({
+          status: 'error',
+          message: `Failed to download file: ${downloadResult.error}`,
+          error_code: 'FILE_NOT_FOUND',
+          statusCode: 404,
+          details: downloadResult.tried_buckets ? {
+            tried_buckets: downloadResult.tried_buckets,
+            storage_path: downloadResult.storage_path,
+            case_type_name: caseDetails.case_types.case_type_name
+          } : undefined
         });
       }
 
-      // Step 6: Return file
-      const arrayBuffer = await fileData.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      const ext = path.extname(storagePath).toLowerCase();
+      // Step 6: Return file as binary response (for viewing in browser)
+      const filename = storagePath.split('/').pop() || documentDetails.file_path.split('/').pop();
       
-      // Determine Content-Type based on file extension
+      // Determine Content-Type based on file extension (fallback if S3 doesn't provide it)
       const contentTypeMap = {
         '.pdf': 'application/pdf',
         '.jpg': 'image/jpeg',
@@ -2121,19 +2283,25 @@ class SupportController {
         '.png': 'image/png',
         '.gif': 'image/gif',
         '.webp': 'image/webp',
+        '.svg': 'image/svg+xml',
         '.doc': 'application/msword',
         '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         '.txt': 'text/plain',
         '.xls': 'application/vnd.ms-excel',
         '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       };
-      const contentType = contentTypeMap[ext] || 'application/octet-stream';
+      const ext = path.extname(filename).toLowerCase();
+      const contentType = downloadResult.contentType || contentTypeMap[ext] || 'application/octet-stream';
 
-      console.log(`[View Document] Returning file: ${buffer.length} bytes, type: ${contentType}, extension: ${ext}`);
+      console.log(`[View Document] Returning file: ${downloadResult.buffer.length} bytes, type: ${contentType}`);
 
-      res.setHeader('Content-Type', contentType);
-      res.setHeader('Content-Disposition', `inline; filename="${path.basename(storagePath)}"`);
-      return res.send(buffer);
+      res.set({
+        'Content-Type': contentType,
+        'Content-Length': downloadResult.contentLength || downloadResult.buffer.length,
+        'Content-Disposition': `inline; filename="${filename}"`,
+        'Cache-Control': 'no-cache'
+      });
+      return res.status(200).send(downloadResult.buffer);
 
     } catch (error) {
       console.error('[View Document] Error:', error);

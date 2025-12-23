@@ -65,6 +65,9 @@ router.get('/invoice_get', SupportController.getLatestInvoice);
 // POST /support/view - View case document by document_id
 router.post('/view', SupportController.viewDocument);
 
+// POST /support/view-case-document - View/Download case document from S3 (similar to partnerDocumentView)
+router.post('/view-case-document', SupportController.viewCaseDocument);
+
 // PATCH /support/removecrmdocument?document_id={document_id} - Soft delete a case document
 router.patch('/removecrmdocument', SupportController.removeCrmDocument);
 
