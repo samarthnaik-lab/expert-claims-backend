@@ -6,6 +6,16 @@ import BacklogCommentModel from '../models/BacklogCommentModel.js';
 import path from 'path';
 import nodemailer from 'nodemailer';
 import bcrypt from 'bcryptjs';
+import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
+
+// AWS S3 Client
+const s3Client = new S3Client({
+  region: process.env.AWS_REGION || 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  }
+});
 
 // Email configuration constants
 const DEFAULT_EMPLOYEE_ID = 61;
@@ -3601,108 +3611,249 @@ class AdminController {
     }
   }
 
+  // Helper: Get backlog document details
+  static async getBacklogDocumentDetails(documentId) {
+    try {
+      const { data: document, error } = await supabase
+        .from('backlog_documents')
+        .select('document_id, backlog_id, file_path')
+        .eq('document_id', documentId)
+        .eq('deleted_flag', false)
+        .maybeSingle();
+
+      if (error || !document) {
+        return null;
+      }
+      return document;
+    } catch (error) {
+      console.error('[Admin] Get backlog document details error:', error.message);
+      return null;
+    }
+  }
+
+  // Helper: Get backlog details with case type
+  static async getBacklogDetailsWithType(backlogId) {
+    try {
+      const { data: backlogData, error: backlogError } = await supabase
+        .from('backlog')
+        .select('backlog_id, case_type_id')
+        .eq('backlog_id', backlogId)
+        .eq('deleted_flag', false)
+        .maybeSingle();
+
+      if (backlogError || !backlogData || !backlogData.case_type_id) {
+        return null;
+      }
+
+      // Get case type name
+      const { data: caseType, error: typeError } = await supabase
+        .from('case_types')
+        .select('case_type_name')
+        .eq('case_type_id', backlogData.case_type_id)
+        .maybeSingle();
+
+      if (typeError || !caseType) {
+        return null;
+      }
+
+      return {
+        backlog_id: backlogData.backlog_id,
+        case_type_id: backlogData.case_type_id,
+        case_types: {
+          case_type_name: caseType.case_type_name
+        }
+      };
+    } catch (error) {
+      console.error('[Admin] Get backlog details error:', error.message);
+      return null;
+    }
+  }
+
+  // Helper: Build bucket name from case type
+  static buildBucketName(caseTypeName) {
+    const safeCaseType = caseTypeName
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '-');
+    
+    return `expc-${safeCaseType}`;
+  }
+
   // POST /admin/documentview
-  // View backlog document by document_id - Returns document URL or file data
+  // View backlog document by document_id - Downloads and returns file directly (similar to support/view)
   static async viewDocument(req, res) {
     try {
       const { document_id } = req.body;
 
-      console.log('[Admin] View document request:', { document_id });
-
-      // Validate required fields
       if (!document_id) {
-        logger.logFailedOperation(req, 400, 'MISSING_DOCUMENT_ID', 'document_id is required', {
-          operation: 'viewDocument'
-        });
-        return res.status(400).json([{
+        return res.status(400).json({
           status: 'error',
-          message: 'document_id is required',
-          error_code: 'MISSING_DOCUMENT_ID'
-        }]);
+          message: 'document_id is required in request body',
+          error_code: 'MISSING_DOCUMENT_ID',
+          statusCode: 400
+        });
       }
 
-      const documentIdNum = parseInt(document_id);
-      if (isNaN(documentIdNum) || documentIdNum < 1) {
-        logger.logFailedOperation(req, 400, 'INVALID_DOCUMENT_ID', 'Invalid document_id', {
-          operation: 'viewDocument',
-          document_id: document_id
-        });
-        return res.status(400).json([{
+      console.log(`[Admin View Document] Fetching backlog document_id: ${document_id}`);
+
+      // Step 1: Get backlog document details
+      const documentDetails = await AdminController.getBacklogDocumentDetails(document_id);
+      
+      if (!documentDetails) {
+        return res.status(404).json({
           status: 'error',
-          message: 'Invalid document_id',
-          error_code: 'INVALID_DOCUMENT_ID'
-        }]);
+          message: 'Document not found',
+          error_code: 'DOCUMENT_NOT_FOUND',
+          statusCode: 404
+        });
       }
 
-      console.log(`[Admin] Fetching backlog document_id: ${documentIdNum}`);
+      console.log(`[Admin View Document] Found document: file_path=${documentDetails.file_path}`);
 
-      // Get document from backlog_documents table
-      const { data: document, error: docError } = await supabase
-        .from('backlog_documents')
-        .select('*')
-        .eq('document_id', documentIdNum)
-        .eq('deleted_flag', false)
-        .single();
-
-      if (docError || !document) {
-        logger.logDatabaseError(docError, 'SELECT', 'backlog_documents', {
-          query: 'Fetching document by document_id',
-          document_id: documentIdNum
-        });
-        logger.logFailedOperation(req, 404, 'DOCUMENT_NOT_FOUND', 'Document not found', {
-          operation: 'viewDocument',
-          document_id: documentIdNum,
-          error: docError?.message
-        });
-        return res.status(404).json([{
+      // Step 2: Get backlog details with case type
+      const backlogDetails = await AdminController.getBacklogDetailsWithType(documentDetails.backlog_id);
+      if (!backlogDetails || !backlogDetails.case_types) {
+        return res.status(404).json({
           status: 'error',
-          message: `Document with ID ${documentIdNum} not found`,
-          error_code: 'DOCUMENT_NOT_FOUND'
-        }]);
+          message: 'Backlog details not found',
+          error_code: 'BACKLOG_NOT_FOUND',
+          statusCode: 404
+        });
       }
 
-      // Fetch document category if category_id exists
-      let categoryName = null;
-      if (document.category_id) {
-        try {
-          const { data: category, error: categoryError } = await supabase
-            .from('document_categories')
-            .select('category_id, category_name')
-            .eq('category_id', document.category_id)
-            .single();
+      // Step 3: Build bucket name
+      const bucketName = AdminController.buildBucketName(backlogDetails.case_types.case_type_name);
+      console.log(`[Admin View Document] Using bucket: ${bucketName}`);
+      console.log(`[Admin View Document] Original file_path: ${documentDetails.file_path}`);
 
-          if (!categoryError && category) {
-            categoryName = category.category_name;
+      // Step 4: Extract and normalize storage path
+      let storagePath = documentDetails.file_path;
+      
+      // If it's a full URL (Supabase storage URL), extract just the path
+      if (storagePath && storagePath.includes('/storage/v1/object/public/')) {
+        const parts = storagePath.split('/storage/v1/object/public/');
+        if (parts.length > 1) {
+          const pathParts = parts[1].split('/');
+          // Remove bucket name (first part) and keep the rest
+          if (pathParts.length > 1) {
+            storagePath = pathParts.slice(1).join('/');
+          } else {
+            storagePath = parts[1];
           }
-        } catch (err) {
-          console.error('[Admin] Error fetching document category:', err);
+        }
+      } else if (storagePath && storagePath.startsWith('bk-')) {
+        // Already in correct format: bk-ECSI-GA-25-086/filename.pdf
+        storagePath = storagePath;
+      } else if (storagePath && storagePath.includes(bucketName + '/')) {
+        // If path contains bucket name, remove it
+        storagePath = storagePath.split(bucketName + '/')[1] || storagePath;
+      } else if (storagePath && storagePath.includes('/')) {
+        // If path starts with bucket name pattern, try to remove it
+        const pathParts = storagePath.split('/');
+        if (pathParts[0].startsWith('expc-') || pathParts[0].startsWith('public-')) {
+          storagePath = pathParts.slice(1).join('/');
         }
       }
 
-      // Increment access count
-      const currentAccessCount = document.access_count ? parseInt(document.access_count) : 0;
-      await supabase
-        .from('backlog_documents')
-        .update({ access_count: currentAccessCount + 1 })
-        .eq('document_id', documentIdNum);
+      console.log(`[Admin View Document] Normalized storage path: ${storagePath}`);
 
-      // Get file path from document
-      const filePath = document.file_path || document.stored_filename;
-
-      if (!filePath) {
-        logger.logFailedOperation(req, 404, 'FILE_PATH_NOT_FOUND', 'Document file path not found', {
-          operation: 'viewDocument',
-          document_id: documentIdNum
+      // Step 5: Try to download from S3 first, then fallback to Supabase storage
+      let downloadResult;
+      
+      // Try S3 download
+      try {
+        const command = new GetObjectCommand({
+          Bucket: bucketName,
+          Key: storagePath
         });
-        return res.status(404).json([{
-          status: 'error',
-          message: 'Document file path not found',
-          error_code: 'FILE_PATH_NOT_FOUND'
-        }]);
+        const response = await s3Client.send(command);
+        
+        // Convert stream to buffer
+        const chunks = [];
+        for await (const chunk of response.Body) {
+          chunks.push(chunk);
+        }
+        const buffer = Buffer.concat(chunks);
+        downloadResult = {
+          success: true,
+          buffer,
+          contentType: response.ContentType,
+          contentLength: response.ContentLength,
+          source: 'S3'
+        };
+        console.log(`[Admin View Document] ✓ File found in S3 bucket: ${bucketName}`);
+      } catch (s3Error) {
+        console.log(`[Admin View Document] ✗ S3 download failed: ${s3Error.message}, trying Supabase storage...`);
+        
+        // Fallback to Supabase storage
+        const bucketVariations = [
+          bucketName, // expc-{case_type_name}
+          `public-${backlogDetails.case_types.case_type_name.trim().toLowerCase().replace(/\s+/g, '-')}`, // public-{case_type_name}
+          'backlog-documents', // Fallback bucket
+          'public-fire' // Common bucket
+        ];
+
+        let fileData = null;
+        let usedBucket = null;
+
+        for (const bucket of bucketVariations) {
+          console.log(`[Admin View Document] Trying Supabase bucket: ${bucket}`);
+          try {
+            const { data, error } = await supabase.storage
+              .from(bucket)
+              .download(storagePath);
+
+            if (!error && data) {
+              fileData = data;
+              usedBucket = bucket;
+              console.log(`[Admin View Document] ✓ File found in Supabase bucket: ${bucket}`);
+              break;
+            } else {
+              console.log(`[Admin View Document] ✗ Not found in bucket: ${bucket}, error: ${error?.message}`);
+            }
+          } catch (supabaseError) {
+            console.log(`[Admin View Document] ✗ Supabase error for bucket ${bucket}: ${supabaseError.message}`);
+          }
+        }
+
+        if (fileData) {
+          const arrayBuffer = await fileData.arrayBuffer();
+          const buffer = Buffer.from(arrayBuffer);
+          downloadResult = {
+            success: true,
+            buffer,
+            contentType: null, // Will be determined from extension
+            contentLength: buffer.length,
+            source: 'Supabase'
+          };
+        } else {
+          downloadResult = {
+            success: false,
+            error: `File not found in S3 or Supabase storage. S3 error: ${s3Error.message}`,
+            tried_buckets: bucketVariations,
+            storage_path: storagePath
+          };
+        }
       }
 
-      // Determine content type from file extension
-      const ext = path.extname(filePath).toLowerCase();
+      if (!downloadResult.success) {
+        return res.status(404).json({
+          status: 'error',
+          message: `Failed to download file: ${downloadResult.error}`,
+          error_code: 'FILE_NOT_FOUND',
+          statusCode: 404,
+          details: downloadResult.tried_buckets ? {
+            tried_buckets: downloadResult.tried_buckets,
+            storage_path: downloadResult.storage_path,
+            case_type_name: backlogDetails.case_types.case_type_name
+          } : undefined
+        });
+      }
+
+      // Step 6: Return file as binary response (for viewing in browser)
+      const filename = storagePath.split('/').pop() || documentDetails.file_path.split('/').pop();
+      
+      // Determine Content-Type based on file extension (fallback if S3 doesn't provide it)
       const contentTypeMap = {
         '.pdf': 'application/pdf',
         '.jpg': 'image/jpeg',
@@ -3710,81 +3861,25 @@ class AdminController {
         '.png': 'image/png',
         '.gif': 'image/gif',
         '.webp': 'image/webp',
+        '.svg': 'image/svg+xml',
         '.doc': 'application/msword',
         '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
         '.txt': 'text/plain',
         '.xls': 'application/vnd.ms-excel',
         '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       };
-      const contentType = contentTypeMap[ext] || 'application/octet-stream';
+      const ext = path.extname(filename).toLowerCase();
+      const contentType = downloadResult.contentType || contentTypeMap[ext] || 'application/octet-stream';
 
-      // If it's already a full URL, return it directly
-      if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
-        return res.status(200).json([{
-          status: 'success',
-          url: filePath,
-          document_url: filePath,
-          document_id: document.document_id,
-          original_filename: document.original_filename || null,
-          stored_filename: document.stored_filename || null,
-          content_type: contentType,
-          access_count: currentAccessCount + 1,
-          uploaded_time: document.upload_time || document.uploaded_at || null,
-          uploaded_by: document.uploaded_by || null,
-          category_id: document.category_id || null,
-          category_name: categoryName || null
-        }]);
-      }
+      console.log(`[Admin View Document] Returning file: ${downloadResult.buffer.length} bytes, type: ${contentType}`);
 
-      // Construct Supabase storage URL
-      // Try to extract bucket name from path or use default
-      let bucketName = 'backlog-documents'; // Default bucket
-
-      // Check if path contains bucket name pattern (e.g., "bk-{backlog_id}/...")
-      if (filePath.includes('bk-')) {
-        bucketName = 'backlog-documents';
-      }
-
-      // Get Supabase URL from environment or config
-      const supabaseUrl = process.env.SUPABASE_URL || '';
-
-      if (supabaseUrl) {
-        // Construct public URL
-        const publicUrl = `${supabaseUrl}/storage/v1/object/public/${bucketName}/${filePath}`;
-
-        return res.status(200).json([{
-          status: 'success',
-          url: publicUrl,
-          document_url: publicUrl,
-          document_id: document.document_id,
-          original_filename: document.original_filename || null,
-          stored_filename: document.stored_filename || null,
-          content_type: contentType,
-          file_size: document.file_size ? parseInt(document.file_size) : null,
-          access_count: currentAccessCount + 1,
-          uploaded_time: document.upload_time || document.uploaded_at || null,
-          uploaded_by: document.uploaded_by || null,
-          category_id: document.category_id || null,
-          category_name: categoryName || null
-        }]);
-      } else {
-        // If no Supabase URL, return relative path
-        return res.status(200).json([{
-          status: 'success',
-          url: filePath,
-          document_url: filePath,
-          document_id: document.document_id,
-          original_filename: document.original_filename || null,
-          stored_filename: document.stored_filename || null,
-          content_type: contentType,
-          file_size: document.file_size ? parseInt(document.file_size) : null,
-          access_count: currentAccessCount + 1,
-          uploaded_time: document.upload_time || document.uploaded_at || null,
-          uploaded_by: document.uploaded_by || null,
-          category_id: document.category_id || null,
-          category_name: categoryName || null
-        }]);
-      }
+      res.set({
+        'Content-Type': contentType,
+        'Content-Length': downloadResult.contentLength || downloadResult.buffer.length,
+        'Content-Disposition': `inline; filename="${filename}"`,
+        'Cache-Control': 'no-cache'
+      });
+      return res.status(200).send(downloadResult.buffer);
 
     } catch (error) {
       logger.logError(error, req, {
@@ -3793,12 +3888,13 @@ class AdminController {
         errorType: 'DocumentViewError',
         document_id: req.body?.document_id
       });
-      console.error('[Admin] View document error:', error);
-      return res.status(500).json([{
+      console.error('[Admin View Document] Error:', error);
+      return res.status(500).json({
         status: 'error',
-        message: 'An error occurred while retrieving the document',
-        error_code: 'INTERNAL_ERROR'
-      }]);
+        message: 'Internal server error: ' + error.message,
+        error_code: 'INTERNAL_ERROR',
+        statusCode: 500
+      });
     }
   }
 
