@@ -1013,34 +1013,100 @@ class PartnerController {
       // Generate backlog_id
       const backlogId = await IdGenerator.generateBacklogId();
 
-      // Create or find customer
-      let customerId = null;
-      if (customer_first_name && customer_last_name) {
-        const { data: existingCustomer } = await CustomerModel.findByName(
-          customer_first_name,
-          customer_last_name,
-          backlog_referring_partner_id || partnerId
-        );
+      // ============================================
+      // RESOLVE PARTNER_ID FROM backlog_referring_partner_id
+      // The incoming value might be either partner_id OR user_id
+      // ============================================
+      let finalPartnerId = null;
+      
+      if (backlog_referring_partner_id) {
+        const incomingId = parseInt(backlog_referring_partner_id);
+        
+        // First, try to find partner by partner_id
+        const { data: partnerById, error: partnerByIdError } = await supabase
+          .from('partners')
+          .select('partner_id')
+          .eq('partner_id', incomingId)
+          .eq('deleted_flag', false)
+          .maybeSingle();
 
-        if (existingCustomer) {
-          customerId = existingCustomer.customer_id;
-        } else {
-          const { data: newCustomer, error: customerError } = await CustomerModel.create({
-            first_name: customer_first_name,
-            last_name: customer_last_name,
-            partner_id: backlog_referring_partner_id || partnerId,
-            created_by: created_by || userId,
-            created_time: new Date().toISOString(),
-            deleted_flag: false
+        if (partnerByIdError) {
+          console.error('Error checking partner by partner_id:', partnerByIdError);
+          return res.status(400).json({
+            success: false,
+            message: `Error validating partner: ${incomingId}`,
+            statusCode: 400,
+            error_details: partnerByIdError?.message || 'Database error'
           });
+        }
 
-          if (!customerError && newCustomer) {
-            customerId = newCustomer.customer_id;
+        if (partnerById) {
+          // Found by partner_id - use it directly
+          finalPartnerId = partnerById.partner_id;
+          console.log(`✓ Found partner by partner_id: ${finalPartnerId}`);
+        } else {
+          // Not found by partner_id, try to find by user_id
+          console.log(`⚠ Value ${incomingId} not found as partner_id, checking if it's a user_id...`);
+          const { data: partnerByUserId, error: partnerByUserIdError } = await PartnerModel.findByUserId(incomingId);
+          
+          if (partnerByUserIdError) {
+            console.error('Error checking partner by user_id:', partnerByUserIdError);
+            return res.status(400).json({
+              success: false,
+              message: `Error validating partner by user_id: ${incomingId}`,
+              statusCode: 400,
+              error_details: partnerByUserIdError?.message || 'Database error'
+            });
+          }
+
+          if (partnerByUserId && partnerByUserId.partner_id) {
+            // Found by user_id - use the partner_id
+            finalPartnerId = partnerByUserId.partner_id;
+            console.log(`✓ Found partner by user_id ${incomingId}: partner_id = ${finalPartnerId}`);
+          } else {
+            // Not found as either partner_id or user_id
+            console.error(`Partner validation failed: ${incomingId} is neither a valid partner_id nor user_id`);
+            return res.status(400).json({
+              success: false,
+              message: `Invalid backlog_referring_partner_id: ${incomingId} does not exist as a partner_id or user_id in partners table.`,
+              statusCode: 400,
+              error_details: 'Partner not found'
+            });
           }
         }
+      } else if (partnerId) {
+        // Use partnerId from authenticated user if available
+        finalPartnerId = partnerId;
+        console.log(`✓ Using partner_id from authenticated user: ${finalPartnerId}`);
       }
 
+      if (!finalPartnerId) {
+        return res.status(400).json({
+          success: false,
+          message: 'backlog_referring_partner_id is required and must be a valid partner_id or user_id.',
+          statusCode: 400
+        });
+      }
 
+      // Final validation: ensure the resolved partner_id exists and is not deleted
+      const { data: finalPartnerCheck, error: finalPartnerCheckError } = await supabase
+        .from('partners')
+        .select('partner_id')
+        .eq('partner_id', finalPartnerId)
+        .eq('deleted_flag', false)
+        .maybeSingle();
+
+      if (finalPartnerCheckError || !finalPartnerCheck) {
+        console.error(`Final partner validation failed: partner_id ${finalPartnerId} not found`);
+        return res.status(400).json({
+          success: false,
+          message: `Invalid partner_id: ${finalPartnerId} does not exist in partners table or has been deleted.`,
+          statusCode: 400,
+          error_details: 'Partner not found'
+        });
+      }
+      
+      console.log(`✓ Final validated partner_id: ${finalPartnerId}`);
 
       // ============================================
       // GET case_type_id FROM FRONTEND AND VALIDATE
@@ -1090,21 +1156,76 @@ class PartnerController {
         });
       }
 
+      // Create or find customer (using validated finalPartnerId)
+      let customerId = null;
+      if (customer_first_name && customer_last_name) {
+        const { data: existingCustomer } = await CustomerModel.findByName(
+          customer_first_name,
+          customer_last_name,
+          finalPartnerId
+        );
+
+        if (existingCustomer) {
+          customerId = existingCustomer.customer_id;
+        } else {
+          // According to schema, mobile_number and age are required fields
+          // Use placeholder values if not provided
+          const customerData = {
+            first_name: customer_first_name,
+            last_name: customer_last_name || null, // Can be null per schema
+            mobile_number: body.mobile_number || '0000000000', // Required - use placeholder if not provided
+            age: body.age ? parseInt(body.age) : 0, // Required - use 0 if not provided (must be 0-120 per constraint)
+            partner_id: finalPartnerId,
+            created_by: created_by ? parseInt(created_by) : (userId ? parseInt(userId) : null),
+            created_time: new Date().toISOString(),
+            deleted_flag: false
+          };
+          
+          const { data: newCustomer, error: customerError } = await CustomerModel.create(customerData);
+
+          if (customerError) {
+            console.error('Error creating customer:', customerError);
+            // Don't fail the entire request if customer creation fails
+            // Just log the error and continue without customer_id
+          } else if (newCustomer) {
+            customerId = newCustomer.customer_id;
+          }
+        }
+      }
+
+      // Format backlog_referral_date as date string (YYYY-MM-DD)
+      let formattedReferralDate = null;
+      if (backlog_referral_date) {
+        // If it's already in YYYY-MM-DD format, use it
+        if (typeof backlog_referral_date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(backlog_referral_date)) {
+          formattedReferralDate = backlog_referral_date;
+        } else {
+          // Try to parse and format
+          const dateObj = new Date(backlog_referral_date);
+          if (!isNaN(dateObj.getTime())) {
+            formattedReferralDate = dateObj.toISOString().split('T')[0];
+          }
+        }
+      }
+      // Default to today if not provided
+      if (!formattedReferralDate) {
+        formattedReferralDate = new Date().toISOString().split('T')[0];
+      }
+
       // Create backlog entry
+      // Note: According to schema, created_by and updated_by in backlog table are TEXT, not integer
       const backlogData = {
         backlog_id: backlogId,
         case_summary: task_summary,
         case_description: case_description,
-
-
         case_type_id: resolvedCaseTypeId, // Use resolved case_type_id
-        backlog_referring_partner_id: backlog_referring_partner_id ? parseInt(backlog_referring_partner_id) : partnerId,
-        backlog_referral_date: backlog_referral_date || new Date().toISOString().split('T')[0],
-        created_by: created_by ? parseInt(created_by) : userId,
+        backlog_referring_partner_id: finalPartnerId,
+        backlog_referral_date: formattedReferralDate,
+        created_by: created_by ? String(created_by) : (userId ? String(userId) : null), // Convert to text
         created_time: created_date ? new Date(created_date).toISOString() : new Date().toISOString(),
-        updated_by: updated_by || null,
+        updated_by: updated_by ? String(updated_by) : null, // Convert to text
         updated_time: new Date().toISOString(),
-        status: status,
+        status: status || 'New', // Default to 'New' per schema
         deleted_flag: false
       };
 
@@ -1120,12 +1241,16 @@ class PartnerController {
       }
 
       // Create comment
+      // Note: According to schema, created_by and updated_by in backlog_comments are INTEGER, not text
       if (comment_text) {
+        const commentCreatedBy = created_by ? parseInt(created_by) : (userId ? parseInt(userId) : null);
+        const commentUpdatedBy = updated_by ? parseInt(updated_by) : null;
+        
         await BacklogCommentModel.create({
           backlog_id: backlogId,
           comment_text: comment_text,
-          created_by: created_by ? parseInt(created_by) : userId,
-          updated_by: updated_by ? parseInt(updated_by) : null,
+          created_by: commentCreatedBy,
+          updated_by: commentUpdatedBy,
           created_time: new Date().toISOString(),
           updated_time: new Date().toISOString(),
           createdby_name: createdby_name || null,
@@ -1490,7 +1615,28 @@ class PartnerController {
           console.log(`  ✓ Final category_id: ${categoryId} (GUARANTEED NOT NULL)`);
           console.log(`=== FINAL category_id for Document ${index}: ${categoryId} ===\n`);
           
-          let finalUserId = userId; // Use separate variable for userId
+          // Determine uploaded_by user_id - required field (NOT NULL in schema)
+          // Priority: 1) authenticated userId, 2) created_by from request body, 3) use finalPartnerId's user_id
+          let finalUserId = userId ? parseInt(userId) : null;
+          
+          if (!finalUserId && created_by) {
+            finalUserId = parseInt(created_by);
+            console.log(`Using created_by from request body as uploaded_by: ${finalUserId}`);
+          }
+          
+          // If still no userId, try to get user_id from partner
+          if (!finalUserId && finalPartnerId) {
+            const { data: partnerData } = await supabase
+              .from('partners')
+              .select('user_id')
+              .eq('partner_id', finalPartnerId)
+              .maybeSingle();
+            
+            if (partnerData?.user_id) {
+              finalUserId = parseInt(partnerData.user_id);
+              console.log(`Using partner's user_id as uploaded_by: ${finalUserId}`);
+            }
+          }
           
           // Validate backlog_id exists
           const { data: backlogCheck, error: backlogCheckError } = await supabase
@@ -1506,25 +1652,43 @@ class PartnerController {
             console.log(`✓ Verified backlog_id ${backlogId} exists`);
           }
           
-          // Check if uploaded_by (userId) exists (if provided)
-          if (finalUserId) {
-            const { data: userCheck, error: userCheckError } = await supabase
-              .from('users')
-              .select('user_id')
-              .eq('user_id', finalUserId)
-              .single();
-            
-            if (userCheckError || !userCheck) {
-              console.error(`=== FOREIGN KEY ERROR: user_id ${finalUserId} does not exist ===`);
-              console.error('User check error:', userCheckError);
-              // Set to null if user doesn't exist
-              finalUserId = null;
-            } else {
-              console.log(`✓ Verified user_id ${finalUserId} exists`);
-            }
-          } else {
-            console.warn('⚠ No userId found for document upload - uploaded_by will be null');
+          // Validate uploaded_by (userId) exists - REQUIRED field (NOT NULL)
+          if (!finalUserId) {
+            console.error('=== ERROR: uploaded_by is required but no user_id found ===');
+            return res.status(400).json({
+              success: false,
+              message: `Document ${index + 1}: uploaded_by is required. Please provide a valid user_id or ensure authentication is enabled.`,
+              statusCode: 400
+            });
           }
+          
+          // Verify user_id exists in users table
+          const { data: userCheck, error: userCheckError } = await supabase
+            .from('users')
+            .select('user_id')
+            .eq('user_id', finalUserId)
+            .maybeSingle();
+          
+          if (userCheckError) {
+            console.error(`=== ERROR validating user_id ${finalUserId} ===`);
+            console.error('User check error:', userCheckError);
+            return res.status(400).json({
+              success: false,
+              message: `Document ${index + 1}: Invalid user_id ${finalUserId} - does not exist in users table`,
+              statusCode: 400
+            });
+          }
+          
+          if (!userCheck) {
+            console.error(`=== FOREIGN KEY ERROR: user_id ${finalUserId} does not exist ===`);
+            return res.status(400).json({
+              success: false,
+              message: `Document ${index + 1}: Invalid user_id ${finalUserId} - does not exist in users table`,
+              statusCode: 400
+            });
+          }
+          
+          console.log(`✓ Verified user_id ${finalUserId} exists and will be used for uploaded_by`);
 
           // Build document object matching table structure exactly
           // Store the Supabase Storage path/URL in file_path
@@ -1542,7 +1706,7 @@ class PartnerController {
             mime_type: file.mimetype || null,
 
 
-            uploaded_by: finalUserId || null,
+            uploaded_by: finalUserId, // REQUIRED - already validated above
             upload_time: new Date().toISOString(),
             is_active: true,
 
@@ -1624,7 +1788,15 @@ class PartnerController {
               });
             }
             
-            validated.uploaded_by = validated.uploaded_by || null;
+            // uploaded_by is REQUIRED (NOT NULL) - ensure it's set
+            if (!validated.uploaded_by) {
+              console.error(`Document ${idx}: uploaded_by is NULL - this should never happen after validation!`);
+              return res.status(500).json({
+                success: false,
+                message: `Document ${idx + 1}: uploaded_by is missing - cannot save document without uploaded_by`,
+                statusCode: 500
+              });
+            }
             
             console.log(`Validated document ${idx}:`, {
               backlog_id: validated.backlog_id,
@@ -2318,19 +2490,10 @@ class PartnerController {
 
       console.log(`[Public] Step 4: File uploaded successfully`);
 
-      // Step 5: Get next document_id
-      const { data: maxDoc } = await supabase
-        .from('backlog_documents')
-        .select('document_id')
-        .order('document_id', { ascending: false })
-        .limit(1)
-        .single();
-
-      const nextDocumentId = (maxDoc?.document_id || 0) + 1;
-
-      // Step 6: Insert document into backlog_documents table
+      // Step 5: Insert document into backlog_documents table
+      // Note: document_id is GENERATED ALWAYS AS IDENTITY - don't set it manually
       const documentData = {
-        document_id: nextDocumentId,
+        // document_id is auto-generated by database - don't include it
         backlog_id: backlog_id,
         category_id: categoryId,
         original_filename: fileName,
@@ -2897,6 +3060,7 @@ class PartnerController {
 }
 
 export default PartnerController;
+
 
 
 
