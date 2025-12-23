@@ -1,5 +1,7 @@
 import supabase from '../config/database.js';
 import UserModel from '../models/UserModel.js';
+import SessionModel from '../models/SessionModel.js';
+import jwt from 'jsonwebtoken';
 
 class CustomerController {
   // GET /customer/getcustomersessiondetails?mobile_number={mobile_number}
@@ -308,6 +310,13 @@ class CustomerController {
         return user.username || '';
       })();
 
+      // Build customer_name from first_name and last_name
+      const customerName = (() => {
+        const first = customer.first_name || '';
+        const last = customer.last_name || '';
+        return `${first} ${last}`.trim();
+      })();
+
       const responseItem = {
         status: 'success',
         message: 'session customer id data Fetch Successfully',
@@ -315,6 +324,7 @@ class CustomerController {
         userid: user.user_id,
         role: user.role || 'customer',
         name: nameFromCustomer,
+        customer_name: customerName, // Concatenated first_name + last_name from customers table
         designation: 'customer',
         department: '',
         customer_id: customer.customer_id,
@@ -339,21 +349,194 @@ class CustomerController {
     }
   }
 
+  // GET /customer/getuserid
+  // Get user_id from session (jwt_token or session_id header)
+  // This helps frontend get user_id when it's not stored locally
+  static async getUserIdFromSession(req, res) {
+    try {
+      const jwtToken = req.headers['jwt_token'] || req.headers['jwt-token'];
+      const sessionId = req.headers['session_id'] || req.headers['session-id'];
+      const authHeader = req.headers['authorization'];
+
+      console.log('[Customer Get User ID] Request received:', {
+        hasJwtToken: !!jwtToken,
+        hasSessionId: !!sessionId,
+        hasAuthHeader: !!authHeader
+      });
+
+      let userId = null;
+
+      // Try JWT token first
+      if (jwtToken) {
+        try {
+          const secret = process.env.JWT_SECRET;
+          if (secret) {
+            const decoded = jwt.verify(jwtToken, secret);
+            if (decoded && decoded.user_id) {
+              userId = decoded.user_id;
+              console.log(`[Customer Get User ID] Found user_id from JWT: ${userId}`);
+            }
+          }
+        } catch (error) {
+          console.warn('[Customer Get User ID] JWT verification failed:', error.message);
+        }
+      }
+
+      // Try Authorization Bearer token
+      if (!userId && authHeader && authHeader.startsWith('Bearer ')) {
+        try {
+          const token = authHeader.substring(7);
+          const secret = process.env.JWT_SECRET;
+          if (secret) {
+            const decoded = jwt.verify(token, secret);
+            if (decoded && decoded.user_id) {
+              userId = decoded.user_id;
+              console.log(`[Customer Get User ID] Found user_id from Authorization header: ${userId}`);
+            }
+          }
+        } catch (error) {
+          console.warn('[Customer Get User ID] Authorization token verification failed:', error.message);
+        }
+      }
+
+      // Try session_id
+      if (!userId && sessionId) {
+        try {
+          const { data: session, error: sessionError } = await SessionModel.findBySessionId(sessionId);
+          if (!sessionError && session && session.user_id) {
+            userId = session.user_id;
+            console.log(`[Customer Get User ID] Found user_id from session_id: ${userId}`);
+          }
+        } catch (error) {
+          console.warn('[Customer Get User ID] Session lookup failed:', error.message);
+        }
+      }
+
+      if (!userId) {
+        return res.status(401).json({
+          status: 'error',
+          message: 'Could not extract user_id from session. Provide jwt_token or session_id in headers.',
+          statusCode: 401
+        });
+      }
+
+      return res.status(200).json({
+        status: 'success',
+        user_id: userId,
+        userId: userId.toString()
+      });
+
+    } catch (error) {
+      console.error('[Customer Get User ID] Error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error',
+        error: error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // Helper: Extract user_id from JWT token or session_id headers
+  static async extractUserIdFromHeaders(req) {
+    try {
+      // Try to get user_id from JWT token in headers
+      const jwtToken = req.headers['jwt_token'] || req.headers['jwt-token'];
+      if (jwtToken) {
+        try {
+          const secret = process.env.JWT_SECRET;
+          if (secret) {
+            const decoded = jwt.verify(jwtToken, secret);
+            if (decoded && decoded.user_id) {
+              console.log(`[Customer] Extracted user_id from JWT token: ${decoded.user_id}`);
+              return decoded.user_id;
+            }
+          }
+        } catch (jwtError) {
+          console.warn('[Customer] JWT token verification failed:', jwtError.message);
+        }
+      }
+
+      // Try to get user_id from session_id header
+      const sessionId = req.headers['session_id'] || req.headers['session-id'];
+      if (sessionId) {
+        const { data: session, error: sessionError } = await SessionModel.findBySessionId(sessionId);
+        if (!sessionError && session && session.user_id) {
+          console.log(`[Customer] Extracted user_id from session_id: ${session.user_id}`);
+          return session.user_id;
+        }
+      }
+
+      // Try Authorization Bearer token
+      const authHeader = req.headers['authorization'];
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+        const token = authHeader.substring(7);
+        try {
+          const secret = process.env.JWT_SECRET;
+          if (secret) {
+            const decoded = jwt.verify(token, secret);
+            if (decoded && decoded.user_id) {
+              console.log(`[Customer] Extracted user_id from Authorization header: ${decoded.user_id}`);
+              return decoded.user_id;
+            }
+          }
+        } catch (jwtError) {
+          console.warn('[Customer] Authorization Bearer token verification failed:', jwtError.message);
+        }
+      }
+
+      return null;
+    } catch (error) {
+      console.error('[Customer] Error extracting user_id from headers:', error);
+      return null;
+    }
+  }
+
   // POST /customer/customer-dashboard
   // Get customer dashboard data - cases for the customer
+  // Automatically extracts user_id from jwt_token/session_id headers if not provided in body
   static async getCustomerDashboard(req, res) {
     try {
-      // Get user_id from multipart/form-data body
-      const userId = req.body.user_id;
+      // Log all incoming data for debugging
+      console.log('[Customer Dashboard] Request received:', {
+        method: req.method,
+        url: req.url,
+        headers: {
+          jwt_token: req.headers['jwt_token'] ? 'present' : 'missing',
+          session_id: req.headers['session_id'] || req.headers['session-id'] || 'missing',
+          authorization: req.headers['authorization'] ? 'present' : 'missing',
+          'content-type': req.headers['content-type']
+        },
+        body: req.body,
+        query: req.query
+      });
+
+      // Try to extract user_id from headers first (JWT token or session_id)
+      let userId = await CustomerController.extractUserIdFromHeaders(req);
+      
+      // Fall back to body or query params if not found in headers
+      if (!userId) {
+        userId = req.body.user_id || req.query.user_id;
+      }
 
       // Validate user_id parameter
       if (!userId) {
+        console.error('[Customer Dashboard] Missing user_id in request:', {
+          body: req.body,
+          query: req.query,
+          headers: {
+            jwt_token: req.headers['jwt_token'] ? 'present' : 'missing',
+            session_id: req.headers['session_id'] || req.headers['session-id'] || 'missing'
+          }
+        });
         return res.status(400).json({
           status: 'error',
-          message: 'user_id is required in form-data body',
+          message: 'user_id is required. Provide it in jwt_token/session_id headers, body, or query params',
           statusCode: 400
         });
       }
+
+      console.log(`[Customer Dashboard] Using user_id: ${userId} (from ${req.body.user_id ? 'body' : 'headers'})`);
 
       // Extract user_id number if it's in format like "user_7069221320_1765803403678" or just a number
       let userIdNum = null;
@@ -423,6 +606,8 @@ class CustomerController {
       console.log(`[Customer] Customer found: customer_id=${customerId}`);
 
       // Fetch cases for this customer
+      // Order by created_time descending (newest first)
+      // Note: created_time is stored as text, but ISO format strings sort correctly
       const { data: rawCases, error: casesError } = await supabase
         .from('cases')
         .select(`
@@ -431,7 +616,7 @@ class CustomerController {
         `)
         .eq('customer_id', customerId)
         .eq('deleted_flag', false)
-        .order('created_time', { ascending: false });
+        .order('created_time', { ascending: false, nullsFirst: false });
 
       if (casesError) {
         console.error('[Customer] Error fetching cases:', casesError);
@@ -526,19 +711,50 @@ class CustomerController {
   // Get customer cases with pagination (multipart/form-data with user_id, page, size)
   static async getCustomerCases(req, res) {
     try {
-      // Get parameters from multipart/form-data body
-      const userId = req.body.user_id;
-      const page = req.body.page;
-      const size = req.body.size;
+      // Log all incoming data for debugging
+      console.log('[Customer Cases] Request received:', {
+        method: req.method,
+        url: req.url,
+        headers: {
+          jwt_token: req.headers['jwt_token'] ? 'present' : 'missing',
+          session_id: req.headers['session_id'] || req.headers['session-id'] || 'missing',
+          authorization: req.headers['authorization'] ? 'present' : 'missing',
+          'content-type': req.headers['content-type']
+        },
+        body: req.body,
+        query: req.query
+      });
+
+      // Try to extract user_id from headers first (JWT token or session_id)
+      let userId = await CustomerController.extractUserIdFromHeaders(req);
+      
+      // Fall back to body or query params if not found in headers
+      if (!userId) {
+        userId = req.body.user_id || req.query.user_id;
+      }
+      
+      // Get page and size from body or query params
+      const page = req.body.page || req.query.page;
+      const size = req.body.size || req.query.size;
 
       // Validate user_id parameter
       if (!userId) {
+        console.error('[Customer Cases] Missing user_id in request:', {
+          body: req.body,
+          query: req.query,
+          headers: {
+            jwt_token: req.headers['jwt_token'] ? 'present' : 'missing',
+            session_id: req.headers['session_id'] || req.headers['session-id'] || 'missing'
+          }
+        });
         return res.status(400).json({
           status: 'error',
-          message: 'user_id is required in form-data body',
+          message: 'user_id is required. Provide it in jwt_token/session_id headers, body, or query params',
           statusCode: 400
         });
       }
+
+      console.log(`[Customer Cases] Using user_id: ${userId} (from ${req.body.user_id ? 'body' : 'headers'}), page: ${page}, size: ${size}`);
 
       // Extract user_id number if it's in format like "user_abhishek_pawar_aiklisolve_com_1765820076045" or just a number
       let userIdNum = null;
@@ -658,6 +874,8 @@ class CustomerController {
       console.log(`[Customer] Customer found: customer_id=${customerId}`);
 
       // Fetch cases for this customer with pagination
+      // Order by created_time descending (newest first)
+      // Note: created_time is stored as text, but ISO format strings sort correctly
       const { data: rawCases, error: casesError, count } = await supabase
         .from('cases')
         .select(`
@@ -670,7 +888,7 @@ class CustomerController {
         `, { count: 'exact' })
         .eq('customer_id', customerId)
         .eq('deleted_flag', false)
-        .order('created_time', { ascending: false })
+        .order('created_time', { ascending: false, nullsFirst: false })
         .range(offset, offset + sizeNum - 1);
 
       if (casesError) {
@@ -774,6 +992,164 @@ class CustomerController {
     } catch (error) {
       console.error('[Customer] Get document categories error:', error);
       return res.status(500).json([]);
+    }
+  }
+
+  // GET /customer/case-details?case_id={case_id} or POST /customer/case-details
+  // Get case details for a specific case (only if it belongs to the logged-in customer)
+  static async getCaseDetails(req, res) {
+    try {
+      // Get case_id from query params or body
+      const caseId = req.query.case_id || req.body.case_id;
+
+      // Log request
+      console.log('[Customer Case Details] Request received:', {
+        case_id: caseId,
+        method: req.method,
+        hasJwtToken: !!(req.headers['jwt_token'] || req.headers['jwt-token']),
+        hasSessionId: !!(req.headers['session_id'] || req.headers['session-id'])
+      });
+
+      // Validate case_id
+      if (!caseId || caseId === 'undefined' || caseId === '') {
+        return res.status(400).json({
+          status: 'error',
+          message: 'case_id is required',
+          statusCode: 400
+        });
+      }
+
+      // Extract user_id from headers
+      let userId = await CustomerController.extractUserIdFromHeaders(req);
+      
+      // Fall back to body if not in headers
+      if (!userId) {
+        userId = req.body.user_id || req.query.user_id;
+      }
+
+      if (!userId) {
+        return res.status(401).json({
+          status: 'error',
+          message: 'Authentication required. Provide jwt_token or session_id in headers.',
+          statusCode: 401
+        });
+      }
+
+      // Get user details
+      const { data: user, error: userError } = await UserModel.findByUserId(userId);
+      if (userError || !user) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'User not found',
+          statusCode: 404
+        });
+      }
+
+      // Get customer details linked to this user
+      const { data: customer, error: customerError } = await supabase
+        .from('customers')
+        .select('*')
+        .eq('user_id', userId)
+        .limit(1)
+        .maybeSingle();
+
+      if (customerError) {
+        console.error('[Customer Case Details] Error fetching customer:', customerError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to fetch customer data',
+          statusCode: 500
+        });
+      }
+
+      if (!customer) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Customer not found for this user',
+          statusCode: 404
+        });
+      }
+
+      const customerId = customer.customer_id;
+      console.log(`[Customer Case Details] Customer found: customer_id=${customerId}, fetching case: ${caseId}`);
+
+      // Fetch case details - IMPORTANT: Verify it belongs to this customer
+      const { data: caseData, error: caseError } = await supabase
+        .from('cases')
+        .select(`
+          *,
+          case_types(*),
+          customers(*),
+          employees!cases_assigned_to_fkey(
+            first_name,
+            last_name
+          )
+        `)
+        .eq('case_id', caseId)
+        .eq('customer_id', customerId) // CRITICAL: Only return if case belongs to this customer
+        .eq('deleted_flag', false)
+        .maybeSingle();
+
+      if (caseError) {
+        console.error('[Customer Case Details] Error fetching case:', caseError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to fetch case data',
+          error: caseError.message || 'Unknown error',
+          statusCode: 500
+        });
+      }
+
+      if (!caseData) {
+        console.log(`[Customer Case Details] Case ${caseId} not found for customer ${customerId}`);
+        return res.status(404).json({
+          status: 'error',
+          message: `Case with ID ${caseId} was not found in your account. This could be because:`,
+          reasons: [
+            'The case ID is incorrect',
+            'The case belongs to another customer',
+            'The case has been removed or archived'
+          ],
+          statusCode: 404
+        });
+      }
+
+      // Fetch related documents (customer visible only)
+      const { data: documents } = await supabase
+        .from('case_documents')
+        .select('*')
+        .eq('case_id', caseId)
+        .eq('is_customer_visible', true)
+        .eq('deleted_flag', false)
+        .order('upload_time', { ascending: false });
+
+      // Fetch case comments (if customer visible)
+      const { data: comments } = await supabase
+        .from('case_comments')
+        .select('*')
+        .eq('case_id', caseId)
+        .eq('is_internal', false) // Only non-internal comments for customers
+        .order('created_time', { ascending: false });
+
+      // Build response
+      const response = {
+        status: 'success',
+        case: {
+          ...caseData,
+          documents: documents || [],
+          comments: comments || []
+        }
+      };
+
+      return res.status(200).json(response);
+
+    } catch (error) {
+      console.error('[Customer Case Details] Error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
     }
   }
 
