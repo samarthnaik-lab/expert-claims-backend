@@ -716,6 +716,13 @@ class PartnerController {
       // Support both claim_amount and claims_amount field names
       const parsedClaimAmount = (claim_amount || claims_amount) ? String(claim_amount || claims_amount) : null;
 
+      // Determine bonus_eligible: if referring_partner_id exists, default to false unless explicitly set
+      // The constraint chk_bonus_eligibility requires bonus_eligible to be explicitly set when referring_partner_id is not null
+      let bonusEligible = false; // Default to false
+      if (req.body.bonus_eligible !== undefined && req.body.bonus_eligible !== null) {
+        bonusEligible = req.body.bonus_eligible === true || req.body.bonus_eligible === 'true';
+      }
+
       // Create case
       const caseData = {
         case_id: caseId,
@@ -732,6 +739,7 @@ class PartnerController {
         "service amount": parsedServiceAmount,
         "claim amount": parsedClaimAmount,
         customer_id: customerId,
+        bonus_eligible: bonusEligible, // Explicitly set bonus_eligible to satisfy constraint
         created_by: userId,
         created_time: new Date().toISOString(),
         deleted_flag: false
@@ -743,10 +751,12 @@ class PartnerController {
         console.error('Error creating case:', caseError);
         console.error('Case data attempted:', JSON.stringify(caseData, null, 2));
         
-        // Check for foreign key constraint violations
+        // Check for constraint violations
         let errorMessage = 'Failed to create case';
         if (caseError && caseError.message) {
-          if (caseError.message.includes('foreign key')) {
+          if (caseError.message.includes('chk_bonus_eligibility')) {
+            errorMessage = 'Bonus eligibility constraint violation: bonus_eligible must be explicitly set when referring_partner_id is provided';
+          } else if (caseError.message.includes('foreign key')) {
             if (caseError.message.includes('case_type_id')) {
               errorMessage = `Invalid case_type_id: ${caseTypeId} does not exist in case_types table`;
             } else if (caseError.message.includes('assigned_to')) {
