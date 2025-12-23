@@ -61,14 +61,20 @@ class PartnerModel {
 
   // Get partner by user_id
   static async findByUserId(userId) {
+    // Use maybeSingle() to handle case where partner doesn't exist gracefully
     const { data, error } = await supabase
       .from('partners')
       .select('*')
       .eq('user_id', userId)
-      .single();
+      .eq('deleted_flag', false) // Only get non-deleted partners
+      .maybeSingle();
 
-    if (error || !data) {
+    if (error) {
       return { data: null, error };
+    }
+
+    if (!data) {
+      return { data: null, error: null };
     }
 
     // Get email from users table
@@ -77,7 +83,7 @@ class PartnerModel {
         .from('users')
         .select('email')
         .eq('user_id', data.user_id)
-        .single();
+        .maybeSingle();
 
       if (user) {
         data.email = user.email;
