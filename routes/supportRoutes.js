@@ -80,6 +80,12 @@ router.patch('/updatepayment', SupportController.updatePayment);
 // POST /webhook/partner_creation - Create partner account (webhook endpoint for n8n)
 router.post('/partner_creation', PartnerController.createPartner);
 
+// POST /assignee_comment_insert - n8n webhook to insert a comment on a case (maps to case_comments)
+router.post('/assignee_comment_insert', SupportController.assigneeCommentInsert);
+
+// GET /employee_all_task?user_id={user_id}&page={page}&size={size} - n8n-style webhook to fetch cases created by a user
+router.get('/employee_all_task', SupportController.employeeAllTask);
+
 // GET /support/getuserdetails?email={email} - Get user details by email
 router.get('/getuserdetails', SupportController.getUserDetails);
 

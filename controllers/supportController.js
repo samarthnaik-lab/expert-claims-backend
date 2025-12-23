@@ -1,6 +1,7 @@
 import BacklogModel from '../models/BacklogModel.js';
 import BacklogCommentModel from '../models/BacklogCommentModel.js';
 import CaseModel from '../models/CaseModel.js';
+import CommentModel from '../models/CommentModel.js';
 import UserModel from '../models/UserModel.js';
 import PartnerModel from '../models/PartnerModel.js';
 import Validators from '../utils/validators.js';
@@ -417,6 +418,62 @@ class SupportController {
 
     } catch (error) {
       console.error('[Support Team] Get employee tasks error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // GET /webhook/employee_all_task?user_id={user_id}&page={page}&size={size}
+  // n8n-style webhook: fetch cases created by a specific user (includes customers relationship)
+  static async employeeAllTask(req, res) {
+    try {
+      const { user_id, page, size } = req.query;
+
+      if (!user_id) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'user_id query parameter is required',
+          statusCode: 400
+        });
+      }
+
+      let pageNum = page ? parseInt(page) : 1;
+      let sizeNum = size ? parseInt(size) : 100;
+      if (isNaN(pageNum) || pageNum < 1) pageNum = 1;
+      if (isNaN(sizeNum) || sizeNum < 1) sizeNum = 100;
+      if (sizeNum > 1000) sizeNum = 1000;
+      const offset = (pageNum - 1) * sizeNum;
+
+      // Try numeric user id when possible
+      const userIdNum = parseInt(user_id);
+      const userFilter = !isNaN(userIdNum) ? userIdNum : user_id;
+
+      const { data: casesList, error: casesError } = await supabase
+        .from('cases')
+        .select(`*,customers(*)`)
+        .eq('created_by', userFilter)
+        .eq('deleted_flag', false)
+        .order('created_time', { ascending: false })
+        .range(offset, offset + sizeNum - 1);
+
+      if (casesError) {
+        console.error('[Support Team] employeeAllTaskWebhook supabase error:', casesError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to fetch cases',
+          error: casesError.message || casesError,
+          statusCode: 500
+        });
+      }
+
+      // Return items directly (n8n `allEntries` style expects array of objects)
+      return res.status(200).json(casesList || []);
+
+    } catch (error) {
+      console.error('[Support Team] employeeAllTaskWebhook error:', error);
       return res.status(500).json({
         status: 'error',
         message: 'Internal server error: ' + error.message,
@@ -846,6 +903,57 @@ class SupportController {
 
     } catch (error) {
       console.error('[Support Team] Insert comment error:', error);
+      return res.status(500).json({
+        status: 'error',
+        message: 'Internal server error: ' + error.message,
+        statusCode: 500
+      });
+    }
+  }
+
+  // POST /assignee_comment_insert
+  // Webhook endpoint to insert a comment into `case_comments` using `case_id`
+  static async assigneeCommentInsert(req, res) {
+    try {
+      const { case_id, user_id, comment, comment_text, internal } = req.body;
+
+      const text = (comment_text || comment || '').toString().trim();
+      if (!case_id || !text) {
+        return res.status(400).json({
+          status: 'error',
+          message: 'case_id and comment (or comment_text) are required',
+          statusCode: 400
+        });
+      }
+
+      // Let database generate `comment_id` (some schemas use IDENTITY/serial)
+      const commentData = {
+        case_id: case_id,
+        user_id: user_id || null,
+        comment_text: text,
+        is_internal: internal === 'true' || internal === true || false,
+        created_time: new Date().toISOString()
+      };
+
+      const { data: createdComment, error: commentError } = await CommentModel.create(commentData);
+      if (commentError) {
+        console.error('[Support Team] assigneeCommentInsert DB error:', commentError);
+        return res.status(500).json({
+          status: 'error',
+          message: 'Failed to create comment',
+          error: commentError.message || commentError,
+          statusCode: 500
+        });
+      }
+
+      return res.status(200).json({
+        status: 'success',
+        message: 'Comment created successfully',
+        data: createdComment
+      });
+
+    } catch (error) {
+      console.error('[Support Team] assigneeCommentInsert error:', error);
       return res.status(500).json({
         status: 'error',
         message: 'Internal server error: ' + error.message,
@@ -2388,8 +2496,8 @@ class SupportController {
         due_date: caseData.due_date || null,
         case_value: caseData.case_value || null,
         value_currency: caseData.value_currency || null,
-        "service amount": caseData.service_amount || null,
-        "claim amount": caseData.claim_amount || null,
+        "service amount": caseData["service amount"] || caseData.service_amount || null,
+        "claim amount": caseData["claim amount"] || caseData.claim_amount || null,
         customer_id: caseData.customer_id || null,
         updated_time: caseData.updated_time || null,
         
