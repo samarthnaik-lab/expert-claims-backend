@@ -72,11 +72,14 @@ app.use((req, res, next) => {
       }
     }
     
-    // Log the request with full details
-    logger.logRequest(req, res, responseTime, parsedBody);
-    
-    // Call original end method
+    // Call original end method FIRST to send response immediately
     originalEnd.call(this, chunk, encoding);
+    
+    // Log the request asynchronously AFTER response is sent (non-blocking)
+    // Use setImmediate to ensure response is fully sent before logging
+    setImmediate(() => {
+      logger.logRequest(req, res, responseTime, parsedBody);
+    });
   };
   
   next();

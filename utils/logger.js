@@ -69,11 +69,16 @@ class Logger {
     return logEntry;
   }
 
-  // Write to log file
+  // Write to log file asynchronously (non-blocking)
   writeToFile(message) {
     try {
       const logFilePath = this.getLogFilePath();
-      fs.appendFileSync(logFilePath, message, 'utf8');
+      // Use async appendFile to avoid blocking the event loop
+      fs.appendFile(logFilePath, message, 'utf8', (error) => {
+        if (error) {
+          console.error('Error writing to log file:', error);
+        }
+      });
     } catch (error) {
       console.error('Error writing to log file:', error);
     }
