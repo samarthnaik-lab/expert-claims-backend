@@ -97,7 +97,10 @@ app.use('/public', publicRoutes);
 app.use('/support', supportRoutes);
 
 // Webhook routes (for n8n and external integrations)
-app.use('/webhook', supportRoutes);
+// Previously we mounted support routes under '/webhook' for backwards compatibility.
+// To ensure the endpoints are available under the `/support` prefix only,
+// remove the duplicate '/webhook' mount. Use `/support` paths (e.g. /support/assignee_comment_insert).
+// app.use('/webhook', supportRoutes);
 
 // Customer routes (new role)
 app.use('/customer', customerRoutes);
