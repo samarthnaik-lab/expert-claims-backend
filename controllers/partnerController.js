@@ -489,6 +489,7 @@ class PartnerController {
       console.log('[Partner] createTask - final userId:', userId);
       
       // Use referring_partner_id from payload, or fallback to partner_id, or get from user
+      // Note: partnerId can be null - task creation will proceed without a partner
       let partnerId = null;
       if (referring_partner_id) {
         partnerId = parseInt(referring_partner_id);
@@ -499,11 +500,9 @@ class PartnerController {
         partnerId = partner?.partner_id || null;
       }
       
+      // Allow task creation even if partnerId is null
       if (!partnerId) {
-        return res.status(400).json([{
-          message: 'Partner not found',
-          case_id: null
-        }]);
+        console.log('[Partner] No partner found - proceeding with task creation without partner');
       }
 
       if (!case_Summary || !case_description) {
@@ -750,7 +749,11 @@ class PartnerController {
             } else if (caseError.message.includes('assigned_to')) {
               errorMessage = `Invalid assigned_to: ${assignedTo} does not exist in employees table`;
             } else if (caseError.message.includes('referring_partner_id')) {
-              errorMessage = `Invalid referring_partner_id: ${partnerId} does not exist in partners table`;
+              if (partnerId) {
+                errorMessage = `Invalid referring_partner_id: ${partnerId} does not exist in partners table`;
+              } else {
+                errorMessage = `Invalid referring_partner_id: null value not allowed (database constraint)`;
+              }
             } else if (caseError.message.includes('customer_id')) {
               errorMessage = `Invalid customer_id: ${customerId} does not exist in customers table`;
             } else if (caseError.message.includes('created_by')) {
