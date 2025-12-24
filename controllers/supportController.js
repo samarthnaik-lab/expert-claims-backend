@@ -991,7 +991,13 @@ class SupportController {
       const formattedEmployees = (employees || []).map(emp => ({
         employee_id: emp.employee_id,
         employee_name: `${emp.first_name || ''} ${emp.last_name || ''}`.trim()
-      }));
+      }))
+      // Sort alphabetically by employee_name (A-Z)
+      .sort((a, b) => {
+        const nameA = (a.employee_name || '').toLowerCase();
+        const nameB = (b.employee_name || '').toLowerCase();
+        return nameA.localeCompare(nameB);
+      });
 
       console.log(`[Support Team] Returning ${formattedEmployees.length} employees`);
       return res.status(200).json(formattedEmployees);
@@ -1037,7 +1043,13 @@ class SupportController {
       const formattedCaseTypes = (caseTypes || []).map(ct => ({
         case_type_id: ct.case_type_id,
         case_type_name: ct.case_type_name || ''
-      }));
+      }))
+      // Sort alphabetically by case_type_name (A-Z)
+      .sort((a, b) => {
+        const nameA = (a.case_type_name || '').toLowerCase();
+        const nameB = (b.case_type_name || '').toLowerCase();
+        return nameA.localeCompare(nameB);
+      });
 
       console.log(`[Support Team] Returning ${formattedCaseTypes.length} case types`);
       
@@ -1108,7 +1120,13 @@ class SupportController {
             customer_name: customerName
           };
         })
-        .filter(cust => cust !== null);
+        .filter(cust => cust !== null)
+        // Sort alphabetically by customer_name (A-Z)
+        .sort((a, b) => {
+          const nameA = (a.customer_name || '').toLowerCase();
+          const nameB = (b.customer_name || '').toLowerCase();
+          return nameA.localeCompare(nameB);
+        });
 
       console.log(`[Support Team] Returning ${formattedCustomers.length} customers`);
       return res.status(200).json(formattedCustomers);
@@ -1149,8 +1167,18 @@ class SupportController {
         partner_id: partner.partner_id,
         first_name: partner.first_name || null,
         last_name: partner.last_name || null,
-        deleted_flag: partner.deleted_flag === true || partner.deleted_flag === 'true'
-      }));
+        deleted_flag: partner.deleted_flag === true || partner.deleted_flag === 'true',
+        // Add full_name for sorting purposes
+        full_name: `${partner.first_name || ''} ${partner.last_name || ''}`.trim() || ''
+      }))
+      // Sort alphabetically by full_name (A-Z)
+      .sort((a, b) => {
+        const nameA = (a.full_name || '').toLowerCase();
+        const nameB = (b.full_name || '').toLowerCase();
+        return nameA.localeCompare(nameB);
+      })
+      // Remove full_name from final response
+      .map(({ full_name, ...rest }) => rest);
 
       console.log(`[Support Team] Returning ${formattedPartners.length} partners`);
       return res.status(200).json(formattedPartners);
