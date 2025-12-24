@@ -161,7 +161,7 @@ class PartnerController {
   // GET /api/MyReferral?partner_id={partner_id}&page={page}&size={size}
   static async getReferrals(req, res) {
     try {
-      const { partner_id, page, size } = req.query;
+      let { partner_id, page, size } = req.query;
 
       if (!partner_id) {
         return res.status(400).json({
@@ -171,21 +171,55 @@ class PartnerController {
         });
       }
 
-      if (!Validators.isValidPartnerId(partner_id)) {
+      // Validate and convert user_id to partner_id if needed
+      let finalPartnerId = partner_id;
+      
+      // First, try to find partner by partner_id
+      const { data: partnerById, error: partnerByIdError } = await PartnerModel.findByPartnerId(partner_id);
+      
+      if (partnerByIdError || !partnerById) {
+        // Not found as partner_id, check if it's a user_id
+        console.log(`[MyReferral] Value ${partner_id} not found as partner_id, checking if it's a user_id...`);
+        const { data: partnerByUserId, error: partnerByUserIdError } = await PartnerModel.findByUserId(partner_id);
+        
+        if (partnerByUserIdError) {
+          console.error('[MyReferral] Error checking partner by user_id:', partnerByUserIdError);
+        }
+        
+        if (partnerByUserId && partnerByUserId.partner_id) {
+          // Found by user_id - use the partner_id
+          finalPartnerId = partnerByUserId.partner_id.toString();
+          console.log(`[MyReferral] ✓ Converted user_id ${partner_id} to partner_id: ${finalPartnerId}`);
+        } else {
+          // Not found as either partner_id or user_id
+          console.error(`[MyReferral] Partner validation failed: ${partner_id} is neither a valid partner_id nor user_id`);
+          return res.status(400).json({
+            status: 'error',
+            message: `Invalid partner_id: ${partner_id} does not exist as a partner_id or user_id in partners table.`,
+            statusCode: 400
+          });
+        }
+      } else {
+        // Found by partner_id - use it directly
+        finalPartnerId = partnerById.partner_id.toString();
+        console.log(`[MyReferral] ✓ Using partner_id: ${finalPartnerId}`);
+      }
+
+      if (!Validators.isValidPartnerId(finalPartnerId)) {
         return res.status(400).json({
           status: 'error',
-          message: 'Invalid partner_id',
+          message: 'Invalid partner_id after validation',
           statusCode: 400
         });
       }
 
-      console.log(`Fetching referrals for partner_id: ${partner_id}, page: ${page}, size: ${size}`);
+      console.log(`[MyReferral] Fetching referrals for partner_id: ${finalPartnerId}, page: ${page}, size: ${size}`);
 
       // If size=10000 or page/size not provided, return all referrals
       const sizeNum = size ? parseInt(size) : null;
       if (!page && !size || sizeNum === 10000) {
         // Return all referrals
-        const { data: referrals, error } = await ReferralModel.findAllByPartnerId(partner_id);
+        const { data: referrals, error } = await ReferralModel.findAllByPartnerId(finalPartnerId);
 
         if (error) {
           console.error('Database error:', error);
@@ -201,7 +235,7 @@ class PartnerController {
         // Use pagination
         const pagination = Validators.validatePagination(page, size);
         const { data: referrals, error, count } = await ReferralModel.findByPartnerId(
-          partner_id,
+          finalPartnerId,
           pagination.page,
           pagination.size
         );
@@ -2849,7 +2883,7 @@ class PartnerController {
   // GET /public/MyReferral?partner_id={partner_id}&page={page}&size={size} - Public endpoint for getting partner referrals (no auth required)
   static async publicGetReferrals(req, res) {
     try {
-      const { partner_id, page, size } = req.query;
+      let { partner_id, page, size } = req.query;
 
       if (!partner_id) {
         return res.status(400).json({
@@ -2859,21 +2893,55 @@ class PartnerController {
         });
       }
 
-      if (!Validators.isValidPartnerId(partner_id)) {
+      // Validate and convert user_id to partner_id if needed
+      let finalPartnerId = partner_id;
+      
+      // First, try to find partner by partner_id
+      const { data: partnerById, error: partnerByIdError } = await PartnerModel.findByPartnerId(partner_id);
+      
+      if (partnerByIdError || !partnerById) {
+        // Not found as partner_id, check if it's a user_id
+        console.log(`[Public MyReferral] Value ${partner_id} not found as partner_id, checking if it's a user_id...`);
+        const { data: partnerByUserId, error: partnerByUserIdError } = await PartnerModel.findByUserId(partner_id);
+        
+        if (partnerByUserIdError) {
+          console.error('[Public MyReferral] Error checking partner by user_id:', partnerByUserIdError);
+        }
+        
+        if (partnerByUserId && partnerByUserId.partner_id) {
+          // Found by user_id - use the partner_id
+          finalPartnerId = partnerByUserId.partner_id.toString();
+          console.log(`[Public MyReferral] ✓ Converted user_id ${partner_id} to partner_id: ${finalPartnerId}`);
+        } else {
+          // Not found as either partner_id or user_id
+          console.error(`[Public MyReferral] Partner validation failed: ${partner_id} is neither a valid partner_id nor user_id`);
+          return res.status(400).json({
+            status: 'error',
+            message: `Invalid partner_id: ${partner_id} does not exist as a partner_id or user_id in partners table.`,
+            statusCode: 400
+          });
+        }
+      } else {
+        // Found by partner_id - use it directly
+        finalPartnerId = partnerById.partner_id.toString();
+        console.log(`[Public MyReferral] ✓ Using partner_id: ${finalPartnerId}`);
+      }
+
+      if (!Validators.isValidPartnerId(finalPartnerId)) {
         return res.status(400).json({
           status: 'error',
-          message: 'Invalid partner_id',
+          message: 'Invalid partner_id after validation',
           statusCode: 400
         });
       }
 
-      console.log(`[Public] Fetching referrals for partner_id: ${partner_id}, page: ${page}, size: ${size}`);
+      console.log(`[Public MyReferral] Fetching referrals for partner_id: ${finalPartnerId}, page: ${page}, size: ${size}`);
 
       // If size=10000 or page/size not provided, return all referrals
       const sizeNum = size ? parseInt(size) : null;
       if (!page && !size || sizeNum === 10000) {
         // Return all referrals
-        const { data: referrals, error } = await ReferralModel.findAllByPartnerId(partner_id);
+        const { data: referrals, error } = await ReferralModel.findAllByPartnerId(finalPartnerId);
 
         if (error) {
           console.error('[Public] Database error:', error);
@@ -2889,7 +2957,7 @@ class PartnerController {
         // Use pagination
         const pagination = Validators.validatePagination(page, size);
         const { data: referrals, error, count } = await ReferralModel.findByPartnerId(
-          partner_id,
+          finalPartnerId,
           pagination.page,
           pagination.size
         );
