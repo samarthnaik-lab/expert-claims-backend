@@ -925,6 +925,7 @@ class CustomerController {
           case_types: caseTypesObj,
           assigned_agent: assignedAgent,
           created_time: c.created_time,
+          updated_time: c.updated_time,
           priority: c.priority,
           case_value: c.case_value,
           value_currency: c.value_currency,
