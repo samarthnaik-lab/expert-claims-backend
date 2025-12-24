@@ -309,7 +309,95 @@ class DocumentController {
         });
       }
 
-      // Step 3: Get document category details (includes case_type_id)
+      // Validate case has a case_type_id
+      if (!caseDetails.case_type_id) {
+        return res.status(400).json({
+          success: false,
+          error: `Case ${case_id} does not have a case_type_id`,
+          statusCode: 400
+        });
+      }
+
+      // Step 3: Validate that the document category belongs to the case's case_type_id
+      // Query document_categories table directly to ensure strong linking
+      try {
+        const categoryValidationResponse = await axios.get(
+          `${SUPABASE_URL}/rest/v1/document_categories`,
+          {
+            params: {
+              category_id: `eq.${category_id}`,
+              case_type_id: `eq.${caseDetails.case_type_id}`,
+              select: 'category_id,case_type_id,document_name,is_active'
+            },
+            headers: supabaseHeaders
+          }
+        );
+
+        // Check if category exists and matches case_type_id
+        if (!categoryValidationResponse.data || categoryValidationResponse.data.length === 0) {
+          // Category doesn't exist or doesn't match case_type_id
+          // Get category details to provide better error message
+          const categoryDetails = await DocumentController.getDocumentCategory(category_id);
+          
+          if (!categoryDetails.case_type_id) {
+            return res.status(400).json({
+              success: false,
+              error: `Document category (category_id: ${category_id}) does not exist or is invalid`,
+              statusCode: 400,
+              details: {
+                case_id: case_id,
+                case_type_id: caseDetails.case_type_id,
+                category_id: category_id
+              }
+            });
+          }
+
+          return res.status(400).json({
+            success: false,
+            error: `Document category (category_id: ${category_id}) does not match the case type. Case has case_type_id: ${caseDetails.case_type_id}, but category belongs to case_type_id: ${categoryDetails.case_type_id}`,
+            statusCode: 400,
+            details: {
+              case_id: case_id,
+              case_type_id: caseDetails.case_type_id,
+              category_id: category_id,
+              category_case_type_id: categoryDetails.case_type_id
+            }
+          });
+        }
+
+        // Verify category is active
+        const categoryData = categoryValidationResponse.data[0];
+        if (!categoryData.is_active) {
+          return res.status(400).json({
+            success: false,
+            error: `Document category (category_id: ${category_id}) is not active`,
+            statusCode: 400,
+            details: {
+              category_id: category_id,
+              is_active: categoryData.is_active
+            }
+          });
+        }
+
+        // Validation passed - category exists, matches case_type_id, and is active
+        console.log(`[Document Upload] ✓ Validated category ${category_id} matches case_type_id ${caseDetails.case_type_id}`);
+      } catch (error) {
+        logger.logError(error, null, {
+          errorType: 'CategoryValidationError',
+          message: error.message,
+          caseId: case_id,
+          categoryId: category_id,
+          caseTypeId: caseDetails.case_type_id
+        });
+        
+        return res.status(500).json({
+          success: false,
+          error: 'Failed to validate document category',
+          statusCode: 500
+        });
+      }
+
+      // Step 4: Get document category details (for document name and case_type_id)
       const categoryDetails = await DocumentController.getDocumentCategory(category_id);
       if (!categoryDetails.case_type_id) {
         return res.status(400).json({
@@ -319,17 +407,17 @@ class DocumentController {
         });
       }
 
-      // Step 4: Get case type name from category's case_type_id (for bucket naming)
+      // Step 5: Get case type name from category's case_type_id (for bucket naming)
       const caseTypeName = await DocumentController.getCaseTypeName(categoryDetails.case_type_id);
       const bucketName = `expc-${caseTypeName}`;
 
-      // Step 5: Get document name from category
+      // Step 6: Get document name from category
       const documentName = categoryDetails.document_name;
 
-      // Step 6: Get latest version number
+      // Step 7: Get latest version number
       const versionNumber = await DocumentController.getLatestVersion(case_id, category_id);
 
-      // Step 7: Generate stored filename
+      // Step 8: Generate stored filename
       const storedFilename = DocumentController.generateStoredFilename(
         file.originalname,
         documentName,
@@ -337,7 +425,7 @@ class DocumentController {
       );
       const filePath = `${case_id}/${storedFilename}`;
 
-      // Step 8: Upload to S3
+      // Step 9: Upload to S3
       const uploadResult = await DocumentController.uploadToS3(
         bucketName,
         filePath,
@@ -353,7 +441,7 @@ class DocumentController {
         });
       }
 
-      // Step 9: Save metadata to database
+      // Step 10: Save metadata to database
       // Note: document_id is GENERATED ALWAYS (auto-incrementing), so we don't set it manually
       // uploaded_by is NOT NULL, so we need to provide a value - use system user (1) if not authenticated
       const metadata = {

@@ -8,6 +8,8 @@ import Validators from '../utils/validators.js';
 import supabase from '../config/database.js';
 import path from 'path';
 import axios from 'axios';
+import jwt from 'jsonwebtoken';
+import SessionModel from '../models/SessionModel.js';
 import { S3Client, GetObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
@@ -2272,7 +2274,7 @@ class SupportController {
           }
         }
       } else if (storagePath && storagePath.startsWith('case-')) {
-        // Already in correct format: case-ECSI-GA-25-086/filename.pdf
+        // Already in correct format: case-ECSI-GA-25-086/filename.pdf or case-123/filename.pdf
         storagePath = storagePath;
       } else if (storagePath && storagePath.includes(bucketName + '/')) {
         // If path contains bucket name, remove it
@@ -2285,66 +2287,199 @@ class SupportController {
         }
       }
 
-      console.log(`[View Document] Normalized storage path: ${storagePath}`);
-
-      // Step 5: Try to download from S3 first, then fallback to Supabase storage
-      let downloadResult;
+      // Prepare path variations to try (original path + alternative formats)
+      const pathVariations = [storagePath]; // Start with normalized path
       
-      // Try S3 download
-        try {
-          const command = new GetObjectCommand({
-            Bucket: bucketName,
-            Key: storagePath
-          });
-        const response = await s3Client.send(command);
+      // If path uses case reference format (ECSI-XX-XXX), also try case-{case_id} format
+      const pathParts = storagePath.split('/');
+      if (pathParts.length > 0 && pathParts[0].match(/^ECSI-\d{2}-\d+$/)) {
+        const caseRef = pathParts[0];
+        const caseIdMatch = caseRef.match(/ECSI-\d{2}-(\d+)$/);
+        if (caseIdMatch) {
+          // Extract numeric case ID from the reference (e.g., "383" from "ECSI-25-383")
+          const numericCaseId = caseIdMatch[1];
+          // Try using the numeric ID from the reference
+          const alternativePath1 = `case-${numericCaseId}/${pathParts.slice(1).join('/')}`;
+          pathVariations.push(alternativePath1);
           
-        // Convert stream to buffer
-        const chunks = [];
-        for await (const chunk of response.Body) {
-          chunks.push(chunk);
-        }
-        const buffer = Buffer.concat(chunks);
-        downloadResult = {
-            success: true,
-          buffer,
-          contentType: response.ContentType,
-          contentLength: response.ContentLength,
-          source: 'S3'
-        };
-        console.log(`[View Document] ✓ File found in S3 bucket: ${bucketName}`);
-        } catch (s3Error) {
-        console.log(`[View Document] ✗ S3 download failed: ${s3Error.message}, trying Supabase storage...`);
-        
-        // Fallback to Supabase storage
-      const bucketVariations = [
-        bucketName, // expc-{case_type_name}
-          `public-${caseDetails.case_types.case_type_name.trim().toLowerCase().replace(/\s+/g, '-')}`, // public-{case_type_name}
-        'case-documents', // Fallback bucket
-          'public-fire' // Common bucket
-      ];
-
-      let fileData = null;
-      let usedBucket = null;
-
-      for (const bucket of bucketVariations) {
-          console.log(`[View Document] Trying Supabase bucket: ${bucket}`);
-          try {
-        const { data, error } = await supabase.storage
-          .from(bucket)
-          .download(storagePath);
-
-        if (!error && data) {
-          fileData = data;
-          usedBucket = bucket;
-              console.log(`[View Document] ✓ File found in Supabase bucket: ${bucket}`);
-          break;
-        } else {
-          console.log(`[View Document] ✗ Not found in bucket: ${bucket}, error: ${error?.message}`);
+          // Also try using documentDetails.case_id if it's different and numeric
+          if (documentDetails.case_id && String(documentDetails.case_id) !== numericCaseId) {
+            const docCaseId = String(documentDetails.case_id);
+            // Check if it's numeric (not a reference string)
+            if (/^\d+$/.test(docCaseId)) {
+              const alternativePath2 = `case-${docCaseId}/${pathParts.slice(1).join('/')}`;
+              pathVariations.push(alternativePath2);
+              console.log(`[View Document] Case reference detected (${caseRef}), will try paths:`);
+              console.log(`[View Document]   1. Original: ${storagePath}`);
+              console.log(`[View Document]   2. Alternative (from ref): ${alternativePath1}`);
+              console.log(`[View Document]   3. Alternative (from DB): ${alternativePath2}`);
+            } else {
+              console.log(`[View Document] Case reference detected (${caseRef}), will try paths:`);
+              console.log(`[View Document]   1. Original: ${storagePath}`);
+              console.log(`[View Document]   2. Alternative: ${alternativePath1}`);
             }
-          } catch (supabaseError) {
-            console.log(`[View Document] ✗ Supabase error for bucket ${bucket}: ${supabaseError.message}`);
+          } else {
+            console.log(`[View Document] Case reference detected (${caseRef}), will try paths:`);
+            console.log(`[View Document]   1. Original: ${storagePath}`);
+            console.log(`[View Document]   2. Alternative: ${alternativePath1}`);
+          }
+        }
+      } else if (pathParts.length > 0 && pathParts[0].startsWith('case-')) {
+        // If path uses case-{case_id} format, also try case reference format
+        const caseIdPart = pathParts[0].replace('case-', '');
+        const caseId = parseInt(caseIdPart);
+        if (!isNaN(caseId)) {
+          // Try to construct case reference format (ECSI-25-XXX)
+          const year = new Date().getFullYear();
+          const yearShort = year.toString().slice(-2);
+          const alternativePath = `ECSI-${yearShort}-${String(caseId).padStart(3, '0')}/${pathParts.slice(1).join('/')}`;
+          pathVariations.push(alternativePath);
+          console.log(`[View Document] Case ID format detected (case-${caseIdPart}), will try both paths:`);
+          console.log(`[View Document]   1. Original: ${storagePath}`);
+          console.log(`[View Document]   2. Alternative: ${alternativePath}`);
         }
       }
+
+      console.log(`[View Document] Normalized storage path: ${storagePath}`);
+
+      // Step 5: Define allowed buckets (only these specific buckets)
+      const allowedBuckets = [
+        'expc-fire',
+        'expc-life',
+        'expc-marine',
+        'expc-health',
+        'expc-motor-od',
+        'expc-motor-tp',
+        'expc-engineering',
+        'expc-liability',
+        'expc-overseas-travel-policy'
+      ];
+
+      // Step 6: Add more path variations to try
+      const originalPath = documentDetails.file_path;
+      
+      // Add original path if different (not already added)
+      if (originalPath !== storagePath && !pathVariations.includes(originalPath)) {
+        pathVariations.push(originalPath);
+      }
+      
+      // Add URL-encoded variations (for paths with spaces or special characters)
+      try {
+        // Try URL-encoded filename
+        const pathDir = storagePath.includes('/') ? storagePath.substring(0, storagePath.lastIndexOf('/') + 1) : '';
+        const fileName = storagePath.split('/').pop();
+        if (fileName && fileName !== storagePath) {
+          const urlEncodedFileName = encodeURIComponent(fileName);
+          if (pathDir) {
+            pathVariations.push(pathDir + urlEncodedFileName);
+          } else {
+            pathVariations.push(urlEncodedFileName);
+          }
+        }
+        
+        // Try with spaces replaced by %20
+        const spaceEncoded = storagePath.replace(/ /g, '%20');
+        if (spaceEncoded !== storagePath) {
+          pathVariations.push(spaceEncoded);
+        }
+        
+        // Try with spaces replaced by +
+        const plusEncoded = storagePath.replace(/ /g, '+');
+        if (plusEncoded !== storagePath) {
+          pathVariations.push(plusEncoded);
+        }
+      } catch (e) {
+        console.log(`[View Document] Error generating URL variations: ${e.message}`);
+      }
+      
+      // If path contains case ID pattern (ECSI-XX-XXX), try variations
+      const caseIdMatch = storagePath.match(/^(ECSI-\d+-\d+)\//);
+      if (caseIdMatch) {
+        const caseId = caseIdMatch[1];
+        const fileName = storagePath.split('/').pop();
+        // Try with case- prefix
+        pathVariations.push(`case-${caseId}/${fileName}`);
+        // Try with bk- prefix (for backlog documents)
+        pathVariations.push(`bk-${caseId}/${fileName}`);
+        // Try just filename (in case it's in root)
+        pathVariations.push(fileName);
+      }
+      
+      // Remove duplicates
+      const uniquePathVariations = [...new Set(pathVariations)];
+      console.log(`[View Document] Will try ${uniquePathVariations.length} path variations:`, uniquePathVariations);
+      console.log(`[View Document] Will try ${allowedBuckets.length} buckets:`, allowedBuckets);
+
+      // Step 7: Try to download from S3 first, then fallback to Supabase storage
+      let downloadResult;
+      let s3Error = null;
+      
+      // Try S3 download with all allowed buckets and path variations
+      s3SearchLoop: for (const bucketToTry of allowedBuckets) {
+        for (const pathToTry of uniquePathVariations) {
+          try {
+            console.log(`[View Document] Trying S3: bucket=${bucketToTry}, key=${pathToTry}`);
+            const command = new GetObjectCommand({
+              Bucket: bucketToTry,
+              Key: pathToTry
+            });
+            const response = await s3Client.send(command);
+            
+            // Convert stream to buffer
+            const chunks = [];
+            for await (const chunk of response.Body) {
+              chunks.push(chunk);
+            }
+            const buffer = Buffer.concat(chunks);
+            downloadResult = {
+              success: true,
+              buffer,
+              contentType: response.ContentType,
+              contentLength: response.ContentLength,
+              source: 'S3',
+              bucket_used: bucketToTry,
+              path_used: pathToTry
+            };
+            console.log(`[View Document] ✓ File found in S3 bucket: ${bucketToTry}, path: ${pathToTry}`);
+            break s3SearchLoop; // Found it, exit both loops
+          } catch (err) {
+            s3Error = err;
+            console.log(`[View Document] ✗ S3 failed for bucket "${bucketToTry}", path "${pathToTry}": ${err.message}`);
+          }
+        }
+      }
+      
+      // If S3 failed, try Supabase storage with all allowed buckets and path variations
+      if (!downloadResult || !downloadResult.success) {
+        console.log(`[View Document] S3 download failed, trying Supabase storage...`);
+        
+        let fileData = null;
+        let usedBucket = null;
+        let usedPath = null;
+
+        // Try each allowed bucket with each path variation
+        supabaseSearchLoop: for (const bucket of allowedBuckets) {
+          for (const pathToTry of uniquePathVariations) {
+            console.log(`[View Document] Trying Supabase: bucket=${bucket}, path=${pathToTry}`);
+            try {
+              const { data, error } = await supabase.storage
+                .from(bucket)
+                .download(pathToTry);
+
+              if (!error && data) {
+                fileData = data;
+                usedBucket = bucket;
+                usedPath = pathToTry;
+                console.log(`[View Document] ✓ File found in Supabase bucket: ${bucket}, path: ${pathToTry}`);
+                break supabaseSearchLoop; // Found it, exit both loops
+              } else {
+                console.log(`[View Document] ✗ Not found in bucket ${bucket}, path ${pathToTry}, error: ${error?.message || 'No data'}`);
+              }
+            } catch (supabaseError) {
+              console.log(`[View Document] ✗ Supabase error for bucket ${bucket}, path ${pathToTry}: ${supabaseError.message}`);
+            }
+          }
+        }
 
         if (fileData) {
           const arrayBuffer = await fileData.arrayBuffer();
@@ -2354,14 +2489,18 @@ class SupportController {
             buffer,
             contentType: null, // Will be determined from extension
             contentLength: buffer.length,
-            source: 'Supabase'
+            source: 'Supabase',
+            bucket_used: usedBucket,
+            path_used: usedPath
           };
         } else {
           downloadResult = {
             success: false,
-            error: `File not found in S3 or Supabase storage. S3 error: ${s3Error.message}`,
-            tried_buckets: bucketVariations,
-            storage_path: storagePath
+            error: `File not found in S3 or Supabase storage. S3 error: ${s3Error?.message || 'Unknown error'}`,
+            tried_buckets: allowedBuckets,
+            tried_paths: uniquePathVariations,
+            storage_path: storagePath,
+            original_path: originalPath
           };
         }
       }
@@ -2372,16 +2511,20 @@ class SupportController {
           message: `Failed to download file: ${downloadResult.error}`,
           error_code: 'FILE_NOT_FOUND',
           statusCode: 404,
-          details: downloadResult.tried_buckets ? {
-            tried_buckets: downloadResult.tried_buckets,
+          details: {
+            tried_buckets: downloadResult.tried_buckets || [],
+            tried_paths: downloadResult.tried_paths || [],
             storage_path: downloadResult.storage_path,
+            original_path: downloadResult.original_path,
             case_type_name: caseDetails.case_types.case_type_name
-          } : undefined
+          }
         });
       }
 
-      // Step 6: Return file as binary response (for viewing in browser)
-      const filename = storagePath.split('/').pop() || documentDetails.file_path.split('/').pop();
+      // Step 8: Return file as binary response (for viewing in browser)
+      // Use the path that was actually found (if available) or fallback to normalized path
+      const foundPath = downloadResult.path_used || storagePath;
+      const filename = foundPath.split('/').pop() || documentDetails.file_path.split('/').pop();
       
       // Determine Content-Type based on file extension (fallback if S3 doesn't provide it)
       const contentTypeMap = {
@@ -3131,9 +3274,64 @@ class SupportController {
         });
       }
 
-      // Step 3: Get user_id from reviewer if provided
+      // Step 3: Extract user_id from JWT token, session_id, or Authorization header
       let userId = null;
-      if (reviewer) {
+      
+      // Try JWT token from jwt_token header
+      const jwtToken = req.headers['jwt_token'] || req.headers['jwt-token'];
+      if (jwtToken) {
+        try {
+          const secret = process.env.JWT_SECRET;
+          if (secret) {
+            const decoded = jwt.verify(jwtToken, secret);
+            if (decoded && decoded.user_id) {
+              userId = decoded.user_id;
+              console.log(`[Update Task] Extracted user_id from JWT token: ${userId}`);
+            }
+          }
+        } catch (error) {
+          console.warn('[Update Task] JWT verification failed:', error.message);
+        }
+      }
+
+      // Try Authorization Bearer token
+      if (!userId) {
+        const authHeader = req.headers['authorization'];
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+          try {
+            const token = authHeader.substring(7);
+            const secret = process.env.JWT_SECRET;
+            if (secret) {
+              const decoded = jwt.verify(token, secret);
+              if (decoded && decoded.user_id) {
+                userId = decoded.user_id;
+                console.log(`[Update Task] Extracted user_id from Authorization header: ${userId}`);
+              }
+            }
+          } catch (error) {
+            console.warn('[Update Task] Authorization token verification failed:', error.message);
+          }
+        }
+      }
+
+      // Try session_id header
+      if (!userId) {
+        const sessionId = req.headers['session_id'] || req.headers['session-id'];
+        if (sessionId) {
+          try {
+            const { data: session, error: sessionError } = await SessionModel.findBySessionId(sessionId);
+            if (!sessionError && session && session.user_id) {
+              userId = session.user_id;
+              console.log(`[Update Task] Extracted user_id from session_id: ${userId}`);
+            }
+          } catch (error) {
+            console.warn('[Update Task] Session lookup failed:', error.message);
+          }
+        }
+      }
+
+      // Fallback: Get user_id from reviewer if provided
+      if (!userId && reviewer) {
         const reviewerNum = parseInt(reviewer);
         if (!isNaN(reviewerNum) && reviewerNum > 0) {
           // Get user_id from employees table
@@ -3145,8 +3343,15 @@ class SupportController {
 
           if (!empError && employeeData && employeeData.user_id) {
             userId = employeeData.user_id;
+            console.log(`[Update Task] Extracted user_id from reviewer: ${userId}`);
           }
         }
+      }
+
+      // Final fallback: use existingCase.updated_by
+      if (!userId && existingCase.updated_by) {
+        userId = existingCase.updated_by;
+        console.log(`[Update Task] Using existingCase.updated_by as user_id: ${userId}`);
       }
 
       // Step 4: Prepare update data for cases table
@@ -3228,28 +3433,40 @@ class SupportController {
 
       // Step 6: Create stage history entry if ticket_stage changed
       if (ticket_stage !== undefined && ticket_stage !== existingCase.ticket_stage) {
-        // Get next stage_history_id
-        const { data: maxHistory } = await supabase
-          .from('case_stage_history')
-          .select('stage_history_id')
-          .order('stage_history_id', { ascending: false })
-          .limit(1)
-          .single();
-
-        const nextHistoryId = (maxHistory?.stage_history_id || 0) + 1;
+        // Note: stage_history_id is GENERATED ALWAYS (auto-incrementing), so we don't set it manually
+        const previousStage = existingCase.ticket_stage || null;
+        const newStage = ticket_stage;
+        
+        // changed_to should be the employee_id (assignee), not user_id
+        let changedToEmployeeId = null;
+        if (assignee !== undefined && assignee !== null) {
+          changedToEmployeeId = parseInt(assignee);
+        } else if (existingCase.assigned_to) {
+          changedToEmployeeId = existingCase.assigned_to;
+        }
 
         const stageHistoryData = {
-          stage_history_id: nextHistoryId,
+          // stage_history_id is auto-generated by database - don't include it
           case_id: fullCaseId,
-          previous_stage: existingCase.ticket_stage || null,
-          new_stage: ticket_stage,
-          changed_by: userId || existingCase.updated_by || null,
-          changed_to: assignee ? parseInt(assignee) : existingCase.assigned_to || null,
-          changed_reason: changedReason || 'Task updated',
+          previous_stage: previousStage, // Old stage from existing case
+          new_stage: newStage, // New stage from request
+          changed_by: userId || null, // User who made the change (from JWT/session)
+          changed_to: changedToEmployeeId, // Employee ID (assignee) - references employees.employee_id
+          changed_reason: changedReason || 'Task updated', // Reason for change
           created_time: new Date().toISOString(),
-          created_by: userId || existingCase.updated_by || null,
+          created_by: userId || null, // User who created this history entry (from JWT/session)
           deleted_flag: false
         };
+
+        console.log('[Update Task] Creating stage history entry:', {
+          case_id: fullCaseId,
+          previous_stage: previousStage,
+          new_stage: newStage,
+          changed_by: userId,
+          changed_to: changedToEmployeeId,
+          changed_reason: changedReason || 'Task updated',
+          created_by: userId
+        });
 
         const { error: historyError } = await supabase
           .from('case_stage_history')
@@ -3257,7 +3474,10 @@ class SupportController {
 
         if (historyError) {
           console.error('[Update Task] Error creating stage history:', historyError);
+          console.error('[Update Task] Stage history data:', JSON.stringify(stageHistoryData, null, 2));
           // Don't fail the request, just log the error
+        } else {
+          console.log('[Update Task] Stage history created successfully');
         }
       }
 
@@ -4248,11 +4468,12 @@ class SupportController {
     }
   }
 
-  // GET /support/getempleaves?employee_id={employee_id}&page={page}&size={size}
+  // GET /support/getempleaves?employee_id={employee_id}&page={page}&size={size}&status={status}
   // Get leave applications for a specific employee with pagination
+  // status filter: 'all', 'pending', 'approved', 'rejected' (default: 'all')
   static async getEmployeeLeaves(req, res) {
     try {
-      const { employee_id, page, size } = req.query;
+      const { employee_id, page, size, status } = req.query;
 
       // Validate employee_id parameter
       if (!employee_id) {
@@ -4292,18 +4513,63 @@ class SupportController {
         });
       }
 
+      // Validate and normalize status filter
+      const validStatuses = ['all', 'pending', 'approved', 'rejected'];
+      const statusParam = status ? status.toLowerCase().trim() : 'all';
+      
+      console.log(`[Employee] Raw status parameter from query:`, status);
+      console.log(`[Employee] Normalized status parameter:`, statusParam);
+      
+      if (status && !validStatuses.includes(statusParam)) {
+        return res.status(400).json({
+          status: 'error',
+          message: `status must be one of: ${validStatuses.join(', ')}`,
+          statusCode: 400
+        });
+      }
+
+      // Determine if we should apply status filter (only if not 'all')
+      const shouldFilterByStatus = statusParam && statusParam !== 'all';
+      const statusFilterValue = shouldFilterByStatus ? statusParam : null;
+
       console.log(`[Employee] Fetching leaves for employee_id: ${employeeIdNum}, page: ${pageNum}, size: ${sizeNum}`);
+      console.log(`[Employee] Status filter will be applied: ${shouldFilterByStatus}, value: '${statusFilterValue || 'none'}'`);
 
       // Calculate pagination
       const offset = (pageNum - 1) * sizeNum;
 
-      // Fetch leave applications for this employee with pagination
-      const { data: leaveApplications, error: leaveError, count } = await supabase
+      // Build query with employee filter and status filter constraint applied directly
+      // Start with base query and employee filter
+      let queryBuilder = supabase
         .from('leave_applications')
         .select('*', { count: 'exact' })
-        .eq('employee_id', employeeIdNum)
-        .order('application_id', { ascending: false })
+        .eq('employee_id', employeeIdNum);
+
+      // Apply status filter constraint if not 'all'
+      if (shouldFilterByStatus && statusFilterValue) {
+        console.log(`[Employee] ✓ Applying status filter constraint: status = '${statusFilterValue}'`);
+        queryBuilder = queryBuilder.eq('status', statusFilterValue);
+      } else {
+        console.log(`[Employee] ✗ No status filter applied - returning all statuses`);
+      }
+
+      // Apply ordering
+      queryBuilder = queryBuilder.order('application_id', { ascending: false });
+      
+      // Apply pagination and execute query
+      const { data: leaveApplications, error: leaveError, count } = await queryBuilder
         .range(offset, offset + sizeNum - 1);
+
+      // Debug: Log what we got back
+      if (leaveApplications && leaveApplications.length > 0) {
+        const statusesFound = [...new Set(leaveApplications.map(l => l.status))];
+        console.log(`[Employee] Retrieved ${leaveApplications.length} leave applications`);
+        console.log(`[Employee] Statuses found in results:`, statusesFound);
+        if (shouldFilterByStatus && statusFilterValue) {
+          const filteredCount = leaveApplications.filter(l => l.status === statusFilterValue).length;
+          console.log(`[Employee] Expected status '${statusFilterValue}' count: ${filteredCount} out of ${leaveApplications.length}`);
+        }
+      }
 
       if (leaveError) {
         console.error('[Employee] Error fetching leave applications:', leaveError);
