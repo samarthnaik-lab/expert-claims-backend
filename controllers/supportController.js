@@ -3168,7 +3168,8 @@ class SupportController {
         updateData["claim amount"] = claimAmountValue !== null && claimAmountValue !== '' ? String(claimAmountValue) : null;
       }
 
-      if (due_date !== undefined && due_date !== null) {
+      // due_date is optional - only update if provided and not empty
+      if (due_date !== undefined && due_date !== null && due_date !== '') {
         // Convert date format from "12/2/2025" to "2025-12-02" or keep as is if already formatted
         let formattedDate = due_date;
         if (typeof due_date === 'string' && due_date.includes('/')) {
@@ -3372,7 +3373,8 @@ class SupportController {
             };
 
             // Add optional fields only if they have values
-            if (payment.due_date) {
+            // due_date is optional - only add if provided and not empty
+            if (payment.due_date !== undefined && payment.due_date !== null && payment.due_date !== '') {
               paymentUpdateData.due_date = payment.due_date;
             }
 
@@ -3435,11 +3437,17 @@ class SupportController {
               };
 
               // Add optional fields only if they have values
-              if (payment.due_date || paymentUpdateData.due_date) {
-                newPaymentData.due_date = payment.due_date || paymentUpdateData.due_date;
+              // due_date is optional - only add if provided and not empty
+              if (payment.due_date !== undefined && payment.due_date !== null && payment.due_date !== '') {
+                newPaymentData.due_date = payment.due_date;
+              } else if (paymentUpdateData.due_date !== undefined && paymentUpdateData.due_date !== null && paymentUpdateData.due_date !== '') {
+                newPaymentData.due_date = paymentUpdateData.due_date;
               }
-              if (payment.payment_date || paymentUpdateData.payment_date) {
-                newPaymentData.payment_date = payment.payment_date || paymentUpdateData.payment_date;
+              // payment_date is optional - only add if provided and not empty
+              if (payment.payment_date !== undefined && payment.payment_date !== null && payment.payment_date !== '') {
+                newPaymentData.payment_date = payment.payment_date;
+              } else if (paymentUpdateData.payment_date !== undefined && paymentUpdateData.payment_date !== null && paymentUpdateData.payment_date !== '') {
+                newPaymentData.payment_date = paymentUpdateData.payment_date;
               }
               if (payment.payment_method || paymentUpdateData.payment_method) {
                 newPaymentData.payment_method = payment.payment_method || paymentUpdateData.payment_method;
