@@ -647,7 +647,7 @@ class PartnerController {
               mobile_number: customer.mobileNumber || null,
               emergency_contact: customer.emergencyContact || null,
               gender: customer.gender || null,
-              age: customer.age ? String(customer.age) : null,
+              age: customer.age ? String(customer.age) : '0', // Required - use '0' if not provided (must be 0-120 per constraint)
               address: customer.address || null,
               customer_type: customer.customerType || null,
               communication_preferences: customer.communicationPreference || null,
