@@ -2355,12 +2355,11 @@ class SupportController {
         'expc-overseas-travel-policy'
       ];
 
-      // Step 6: Generate path variations to try
+      // Step 6: Add more path variations to try
       const originalPath = documentDetails.file_path;
-      const pathVariations = [storagePath]; // Start with normalized path
       
-      // Add original path if different
-      if (originalPath !== storagePath) {
+      // Add original path if different (not already added)
+      if (originalPath !== storagePath && !pathVariations.includes(originalPath)) {
         pathVariations.push(originalPath);
       }
       
@@ -4461,11 +4460,12 @@ class SupportController {
     }
   }
 
-  // GET /support/getempleaves?employee_id={employee_id}&page={page}&size={size}
+  // GET /support/getempleaves?employee_id={employee_id}&page={page}&size={size}&status={status}
   // Get leave applications for a specific employee with pagination
+  // status filter: 'all', 'pending', 'approved', 'rejected' (default: 'all')
   static async getEmployeeLeaves(req, res) {
     try {
-      const { employee_id, page, size } = req.query;
+      const { employee_id, page, size, status } = req.query;
 
       // Validate employee_id parameter
       if (!employee_id) {
@@ -4505,18 +4505,63 @@ class SupportController {
         });
       }
 
+      // Validate and normalize status filter
+      const validStatuses = ['all', 'pending', 'approved', 'rejected'];
+      const statusParam = status ? status.toLowerCase().trim() : 'all';
+      
+      console.log(`[Employee] Raw status parameter from query:`, status);
+      console.log(`[Employee] Normalized status parameter:`, statusParam);
+      
+      if (status && !validStatuses.includes(statusParam)) {
+        return res.status(400).json({
+          status: 'error',
+          message: `status must be one of: ${validStatuses.join(', ')}`,
+          statusCode: 400
+        });
+      }
+
+      // Determine if we should apply status filter (only if not 'all')
+      const shouldFilterByStatus = statusParam && statusParam !== 'all';
+      const statusFilterValue = shouldFilterByStatus ? statusParam : null;
+
       console.log(`[Employee] Fetching leaves for employee_id: ${employeeIdNum}, page: ${pageNum}, size: ${sizeNum}`);
+      console.log(`[Employee] Status filter will be applied: ${shouldFilterByStatus}, value: '${statusFilterValue || 'none'}'`);
 
       // Calculate pagination
       const offset = (pageNum - 1) * sizeNum;
 
-      // Fetch leave applications for this employee with pagination
-      const { data: leaveApplications, error: leaveError, count } = await supabase
+      // Build query with employee filter and status filter constraint applied directly
+      // Start with base query and employee filter
+      let queryBuilder = supabase
         .from('leave_applications')
         .select('*', { count: 'exact' })
-        .eq('employee_id', employeeIdNum)
-        .order('application_id', { ascending: false })
+        .eq('employee_id', employeeIdNum);
+
+      // Apply status filter constraint if not 'all'
+      if (shouldFilterByStatus && statusFilterValue) {
+        console.log(`[Employee] ✓ Applying status filter constraint: status = '${statusFilterValue}'`);
+        queryBuilder = queryBuilder.eq('status', statusFilterValue);
+      } else {
+        console.log(`[Employee] ✗ No status filter applied - returning all statuses`);
+      }
+
+      // Apply ordering
+      queryBuilder = queryBuilder.order('application_id', { ascending: false });
+      
+      // Apply pagination and execute query
+      const { data: leaveApplications, error: leaveError, count } = await queryBuilder
         .range(offset, offset + sizeNum - 1);
+
+      // Debug: Log what we got back
+      if (leaveApplications && leaveApplications.length > 0) {
+        const statusesFound = [...new Set(leaveApplications.map(l => l.status))];
+        console.log(`[Employee] Retrieved ${leaveApplications.length} leave applications`);
+        console.log(`[Employee] Statuses found in results:`, statusesFound);
+        if (shouldFilterByStatus && statusFilterValue) {
+          const filteredCount = leaveApplications.filter(l => l.status === statusFilterValue).length;
+          console.log(`[Employee] Expected status '${statusFilterValue}' count: ${filteredCount} out of ${leaveApplications.length}`);
+        }
+      }
 
       if (leaveError) {
         console.error('[Employee] Error fetching leave applications:', leaveError);

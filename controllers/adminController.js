@@ -1553,11 +1553,12 @@ class AdminController {
     }
   }
 
-  // GET /admin/getleaves?page={page}&size={size}
+  // GET /admin/getleaves?page={page}&size={size}&status={status}
   // Get all leave applications with employee and leave type information
+  // status filter: 'all', 'pending', 'approved', 'rejected' (default: 'all')
   static async getLeaveApplications(req, res) {
     try {
-      const { page, size } = req.query;
+      const { page, size, status } = req.query;
       
       // Default pagination values if not provided
       const pageNum = page ? parseInt(page) : 1;
@@ -1580,17 +1581,65 @@ class AdminController {
         }]);
       }
 
+      // Validate and normalize status filter
+      const validStatuses = ['all', 'pending', 'approved', 'rejected'];
+      const statusParam = status ? status.toLowerCase().trim() : 'all';
+      
+      console.log(`[Admin] Raw status parameter from query:`, status);
+      console.log(`[Admin] Normalized status parameter:`, statusParam);
+      
+      if (status && !validStatuses.includes(statusParam)) {
+        return res.status(400).json([{
+          status: 'error',
+          message: `status must be one of: ${validStatuses.join(', ')}`,
+          error_code: 'INVALID_PARAMETERS'
+        }]);
+      }
+
+      // Determine if we should apply status filter (only if not 'all')
+      const shouldFilterByStatus = statusParam && statusParam !== 'all';
+      const statusFilterValue = shouldFilterByStatus ? statusParam : null;
+
       console.log(`[Admin] Fetching leave applications - page: ${pageNum}, size: ${sizeNum}`);
+      console.log(`[Admin] Status filter will be applied: ${shouldFilterByStatus}, value: '${statusFilterValue || 'none'}'`);
 
       // Calculate pagination
       const offset = (pageNum - 1) * sizeNum;
 
-      // Fetch leave applications with pagination
-      const { data: leaveApplications, error: leaveError, count } = await supabase
+      // Build query with status filter constraint applied directly
+      // Construct the query chain explicitly
+      let queryBuilder = supabase
         .from('leave_applications')
-        .select('*', { count: 'exact' })
-        .order('application_id', { ascending: false })
+        .select('*', { count: 'exact' });
+
+      // Apply status filter constraint if not 'all'
+      if (shouldFilterByStatus && statusFilterValue) {
+        console.log(`[Admin] ✓ Applying status filter constraint: status = '${statusFilterValue}'`);
+        queryBuilder = queryBuilder.eq('status', statusFilterValue);
+      } else {
+        console.log(`[Admin] ✗ No status filter applied - returning all statuses`);
+      }
+
+      // Apply ordering
+      queryBuilder = queryBuilder.order('application_id', { ascending: false });
+      
+      // Log the query being built (for debugging)
+      console.log(`[Admin] Executing query with filter: ${shouldFilterByStatus ? `status='${statusFilterValue}'` : 'no filter'}, offset: ${offset}, limit: ${sizeNum}`);
+      
+      // Apply pagination and execute query
+      const { data: leaveApplications, error: leaveError, count } = await queryBuilder
         .range(offset, offset + sizeNum - 1);
+
+      // Debug: Log what we got back
+      if (leaveApplications && leaveApplications.length > 0) {
+        const statusesFound = [...new Set(leaveApplications.map(l => l.status))];
+        console.log(`[Admin] Retrieved ${leaveApplications.length} leave applications`);
+        console.log(`[Admin] Statuses found in results:`, statusesFound);
+        if (shouldFilterByStatus && statusFilterValue) {
+          const filteredCount = leaveApplications.filter(l => l.status === statusFilterValue).length;
+          console.log(`[Admin] Expected status '${statusFilterValue}' count: ${filteredCount} out of ${leaveApplications.length}`);
+        }
+      }
 
       if (leaveError) {
         console.error('[Admin] Error fetching leave applications:', leaveError);
@@ -4239,11 +4288,12 @@ class AdminController {
     }
   }
 
-  // GET /admin/getleaves?page={page}&size={size}
+  // GET /admin/getleaves?page={page}&size={size}&status={status}
   // Get all leave applications with employee and leave type information
+  // status filter: 'all', 'pending', 'approved', 'rejected' (default: 'all')
   static async getLeaveApplications(req, res) {
     try {
-      const { page, size } = req.query;
+      const { page, size, status } = req.query;
       
       // Default pagination values if not provided
       const pageNum = page ? parseInt(page) : 1;
@@ -4266,17 +4316,65 @@ class AdminController {
         }]);
       }
 
+      // Validate and normalize status filter
+      const validStatuses = ['all', 'pending', 'approved', 'rejected'];
+      const statusParam = status ? status.toLowerCase().trim() : 'all';
+      
+      console.log(`[Admin] Raw status parameter from query:`, status);
+      console.log(`[Admin] Normalized status parameter:`, statusParam);
+      
+      if (status && !validStatuses.includes(statusParam)) {
+        return res.status(400).json([{
+          status: 'error',
+          message: `status must be one of: ${validStatuses.join(', ')}`,
+          error_code: 'INVALID_PARAMETERS'
+        }]);
+      }
+
+      // Determine if we should apply status filter (only if not 'all')
+      const shouldFilterByStatus = statusParam && statusParam !== 'all';
+      const statusFilterValue = shouldFilterByStatus ? statusParam : null;
+
       console.log(`[Admin] Fetching leave applications - page: ${pageNum}, size: ${sizeNum}`);
+      console.log(`[Admin] Status filter will be applied: ${shouldFilterByStatus}, value: '${statusFilterValue || 'none'}'`);
 
       // Calculate pagination
       const offset = (pageNum - 1) * sizeNum;
 
-      // Fetch leave applications with pagination
-      const { data: leaveApplications, error: leaveError, count } = await supabase
+      // Build query with status filter constraint applied directly
+      // Construct the query chain explicitly
+      let queryBuilder = supabase
         .from('leave_applications')
-        .select('*', { count: 'exact' })
-        .order('application_id', { ascending: false })
+        .select('*', { count: 'exact' });
+
+      // Apply status filter constraint if not 'all'
+      if (shouldFilterByStatus && statusFilterValue) {
+        console.log(`[Admin] ✓ Applying status filter constraint: status = '${statusFilterValue}'`);
+        queryBuilder = queryBuilder.eq('status', statusFilterValue);
+      } else {
+        console.log(`[Admin] ✗ No status filter applied - returning all statuses`);
+      }
+
+      // Apply ordering
+      queryBuilder = queryBuilder.order('application_id', { ascending: false });
+      
+      // Log the query being built (for debugging)
+      console.log(`[Admin] Executing query with filter: ${shouldFilterByStatus ? `status='${statusFilterValue}'` : 'no filter'}, offset: ${offset}, limit: ${sizeNum}`);
+      
+      // Apply pagination and execute query
+      const { data: leaveApplications, error: leaveError, count } = await queryBuilder
         .range(offset, offset + sizeNum - 1);
+
+      // Debug: Log what we got back
+      if (leaveApplications && leaveApplications.length > 0) {
+        const statusesFound = [...new Set(leaveApplications.map(l => l.status))];
+        console.log(`[Admin] Retrieved ${leaveApplications.length} leave applications`);
+        console.log(`[Admin] Statuses found in results:`, statusesFound);
+        if (shouldFilterByStatus && statusFilterValue) {
+          const filteredCount = leaveApplications.filter(l => l.status === statusFilterValue).length;
+          console.log(`[Admin] Expected status '${statusFilterValue}' count: ${filteredCount} out of ${leaveApplications.length}`);
+        }
+      }
 
       if (leaveError) {
         console.error('[Admin] Error fetching leave applications:', leaveError);
