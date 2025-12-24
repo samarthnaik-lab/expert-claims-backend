@@ -2272,7 +2272,7 @@ class SupportController {
           }
         }
       } else if (storagePath && storagePath.startsWith('case-')) {
-        // Already in correct format: case-ECSI-GA-25-086/filename.pdf
+        // Already in correct format: case-ECSI-GA-25-086/filename.pdf or case-123/filename.pdf
         storagePath = storagePath;
       } else if (storagePath && storagePath.includes(bucketName + '/')) {
         // If path contains bucket name, remove it
@@ -2285,66 +2285,134 @@ class SupportController {
         }
       }
 
+      // Prepare path variations to try (original path + alternative formats)
+      const pathVariations = [storagePath]; // Start with normalized path
+      
+      // If path uses case reference format (ECSI-XX-XXX), also try case-{case_id} format
+      const pathParts = storagePath.split('/');
+      if (pathParts.length > 0 && pathParts[0].match(/^ECSI-\d{2}-\d+$/)) {
+        const caseRef = pathParts[0];
+        const caseIdMatch = caseRef.match(/ECSI-\d{2}-(\d+)$/);
+        if (caseIdMatch) {
+          // Extract numeric case ID from the reference (e.g., "383" from "ECSI-25-383")
+          const numericCaseId = caseIdMatch[1];
+          // Try using the numeric ID from the reference
+          const alternativePath1 = `case-${numericCaseId}/${pathParts.slice(1).join('/')}`;
+          pathVariations.push(alternativePath1);
+          
+          // Also try using documentDetails.case_id if it's different and numeric
+          if (documentDetails.case_id && String(documentDetails.case_id) !== numericCaseId) {
+            const docCaseId = String(documentDetails.case_id);
+            // Check if it's numeric (not a reference string)
+            if (/^\d+$/.test(docCaseId)) {
+              const alternativePath2 = `case-${docCaseId}/${pathParts.slice(1).join('/')}`;
+              pathVariations.push(alternativePath2);
+              console.log(`[View Document] Case reference detected (${caseRef}), will try paths:`);
+              console.log(`[View Document]   1. Original: ${storagePath}`);
+              console.log(`[View Document]   2. Alternative (from ref): ${alternativePath1}`);
+              console.log(`[View Document]   3. Alternative (from DB): ${alternativePath2}`);
+            } else {
+              console.log(`[View Document] Case reference detected (${caseRef}), will try paths:`);
+              console.log(`[View Document]   1. Original: ${storagePath}`);
+              console.log(`[View Document]   2. Alternative: ${alternativePath1}`);
+            }
+          } else {
+            console.log(`[View Document] Case reference detected (${caseRef}), will try paths:`);
+            console.log(`[View Document]   1. Original: ${storagePath}`);
+            console.log(`[View Document]   2. Alternative: ${alternativePath1}`);
+          }
+        }
+      } else if (pathParts.length > 0 && pathParts[0].startsWith('case-')) {
+        // If path uses case-{case_id} format, also try case reference format
+        const caseIdPart = pathParts[0].replace('case-', '');
+        const caseId = parseInt(caseIdPart);
+        if (!isNaN(caseId)) {
+          // Try to construct case reference format (ECSI-25-XXX)
+          const year = new Date().getFullYear();
+          const yearShort = year.toString().slice(-2);
+          const alternativePath = `ECSI-${yearShort}-${String(caseId).padStart(3, '0')}/${pathParts.slice(1).join('/')}`;
+          pathVariations.push(alternativePath);
+          console.log(`[View Document] Case ID format detected (case-${caseIdPart}), will try both paths:`);
+          console.log(`[View Document]   1. Original: ${storagePath}`);
+          console.log(`[View Document]   2. Alternative: ${alternativePath}`);
+        }
+      }
+
       console.log(`[View Document] Normalized storage path: ${storagePath}`);
 
       // Step 5: Try to download from S3 first, then fallback to Supabase storage
       let downloadResult;
       
-      // Try S3 download
+      // Try S3 download with all path variations
+      let s3Success = false;
+      let workingPath = storagePath;
+      for (const tryPath of pathVariations) {
         try {
           const command = new GetObjectCommand({
             Bucket: bucketName,
-            Key: storagePath
+            Key: tryPath
           });
-        const response = await s3Client.send(command);
+          const response = await s3Client.send(command);
           
-        // Convert stream to buffer
-        const chunks = [];
-        for await (const chunk of response.Body) {
-          chunks.push(chunk);
-        }
-        const buffer = Buffer.concat(chunks);
-        downloadResult = {
+          // Convert stream to buffer
+          const chunks = [];
+          for await (const chunk of response.Body) {
+            chunks.push(chunk);
+          }
+          const buffer = Buffer.concat(chunks);
+          downloadResult = {
             success: true,
-          buffer,
-          contentType: response.ContentType,
-          contentLength: response.ContentLength,
-          source: 'S3'
-        };
-        console.log(`[View Document] ✓ File found in S3 bucket: ${bucketName}`);
-        } catch (s3Error) {
-        console.log(`[View Document] ✗ S3 download failed: ${s3Error.message}, trying Supabase storage...`);
-        
-        // Fallback to Supabase storage
-      const bucketVariations = [
-        bucketName, // expc-{case_type_name}
-          `public-${caseDetails.case_types.case_type_name.trim().toLowerCase().replace(/\s+/g, '-')}`, // public-{case_type_name}
-        'case-documents', // Fallback bucket
-          'public-fire' // Common bucket
-      ];
-
-      let fileData = null;
-      let usedBucket = null;
-
-      for (const bucket of bucketVariations) {
-          console.log(`[View Document] Trying Supabase bucket: ${bucket}`);
-          try {
-        const { data, error } = await supabase.storage
-          .from(bucket)
-          .download(storagePath);
-
-        if (!error && data) {
-          fileData = data;
-          usedBucket = bucket;
-              console.log(`[View Document] ✓ File found in Supabase bucket: ${bucket}`);
+            buffer,
+            contentType: response.ContentType,
+            contentLength: response.ContentLength,
+            source: 'S3'
+          };
+          console.log(`[View Document] ✓ File found in S3 bucket: ${bucketName}, path: ${tryPath}`);
+          s3Success = true;
+          workingPath = tryPath; // Update to working path
           break;
-        } else {
-          console.log(`[View Document] ✗ Not found in bucket: ${bucket}, error: ${error?.message}`);
-            }
-          } catch (supabaseError) {
-            console.log(`[View Document] ✗ Supabase error for bucket ${bucket}: ${supabaseError.message}`);
+        } catch (s3Error) {
+          console.log(`[View Document] ✗ S3 download failed for path "${tryPath}": ${s3Error.message}`);
         }
       }
+      
+      if (!s3Success) {
+        console.log(`[View Document] ✗ S3 download failed for all path variations, trying Supabase storage...`);
+        
+        // Fallback to Supabase storage - try all path variations
+        const bucketVariations = [
+          bucketName, // expc-{case_type_name}
+          `public-${caseDetails.case_types.case_type_name.trim().toLowerCase().replace(/\s+/g, '-')}`, // public-{case_type_name}
+          'case-documents', // Fallback bucket
+          'public-fire' // Common bucket
+        ];
+
+        let fileData = null;
+        let usedBucket = null;
+
+        for (const tryPath of pathVariations) {
+          for (const bucket of bucketVariations) {
+            console.log(`[View Document] Trying Supabase bucket: ${bucket}, path: ${tryPath}`);
+            try {
+              const { data, error } = await supabase.storage
+                .from(bucket)
+                .download(tryPath);
+
+              if (!error && data) {
+                fileData = data;
+                usedBucket = bucket;
+                workingPath = tryPath; // Update to working path
+                console.log(`[View Document] ✓ File found in Supabase bucket: ${bucket}, path: ${tryPath}`);
+                break;
+              } else {
+                console.log(`[View Document] ✗ Not found in bucket: ${bucket}, path: ${tryPath}, error: ${error?.message}`);
+              }
+            } catch (supabaseError) {
+              console.log(`[View Document] ✗ Supabase error for bucket ${bucket}, path ${tryPath}: ${supabaseError.message}`);
+            }
+          }
+          if (fileData) break; // Found file, exit path loop
+        }
 
         if (fileData) {
           const arrayBuffer = await fileData.arrayBuffer();
@@ -2359,8 +2427,9 @@ class SupportController {
         } else {
           downloadResult = {
             success: false,
-            error: `File not found in S3 or Supabase storage. S3 error: ${s3Error.message}`,
+            error: `File not found in S3 or Supabase storage after trying all path variations`,
             tried_buckets: bucketVariations,
+            tried_paths: pathVariations,
             storage_path: storagePath
           };
         }
@@ -2374,14 +2443,17 @@ class SupportController {
           statusCode: 404,
           details: downloadResult.tried_buckets ? {
             tried_buckets: downloadResult.tried_buckets,
+            tried_paths: downloadResult.tried_paths,
             storage_path: downloadResult.storage_path,
-            case_type_name: caseDetails.case_types.case_type_name
+            case_type_name: caseDetails.case_types.case_type_name,
+            case_id: documentDetails.case_id
           } : undefined
         });
       }
 
       // Step 6: Return file as binary response (for viewing in browser)
-      const filename = storagePath.split('/').pop() || documentDetails.file_path.split('/').pop();
+      // Use workingPath (the path that actually worked) instead of storagePath
+      const filename = workingPath.split('/').pop() || storagePath.split('/').pop() || documentDetails.file_path.split('/').pop();
       
       // Determine Content-Type based on file extension (fallback if S3 doesn't provide it)
       const contentTypeMap = {
