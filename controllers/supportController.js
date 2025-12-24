@@ -2357,10 +2357,9 @@ class SupportController {
 
       // Step 6: Generate path variations to try
       const originalPath = documentDetails.file_path;
-      const pathVariations = [storagePath]; // Start with normalized path
       
-      // Add original path if different
-      if (originalPath !== storagePath) {
+      // Add original path if different (pathVariations already initialized above)
+      if (originalPath !== storagePath && !pathVariations.includes(originalPath)) {
         pathVariations.push(originalPath);
       }
       
