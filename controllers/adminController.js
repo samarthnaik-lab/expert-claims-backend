@@ -1116,7 +1116,42 @@ class AdminController {
         }]);
       }
 
-      const normalizedRole = existingUser.role?.toLowerCase() || role?.toLowerCase();
+      // Determine role: prioritize role from request body, fallback to existing user's role
+      // Normalize role (handle plural forms: customers -> customer, employees -> employee, partners -> partner)
+      let roleToUse = null;
+      if (role) {
+        const roleLower = role.toLowerCase().trim();
+        if (roleLower === 'customers') roleToUse = 'customer';
+        else if (roleLower === 'employees') roleToUse = 'employee';
+        else if (roleLower === 'partners') roleToUse = 'partner';
+        else roleToUse = roleLower;
+      } else if (existingUser.role) {
+        const roleLower = existingUser.role.toLowerCase().trim();
+        if (roleLower === 'customers') roleToUse = 'customer';
+        else if (roleLower === 'employees') roleToUse = 'employee';
+        else if (roleLower === 'partners') roleToUse = 'partner';
+        else roleToUse = roleLower;
+      }
+
+      if (!roleToUse) {
+        return res.status(400).json([{
+          status: 'error',
+          message: 'Role is required. Please provide role in request body or ensure user has a role',
+          error_code: 'MISSING_ROLE'
+        }]);
+      }
+
+      // Validate role is one of the supported roles
+      const validRoles = ['customer', 'admin', 'employee', 'partner'];
+      if (!validRoles.includes(roleToUse)) {
+        return res.status(400).json([{
+          status: 'error',
+          message: `Invalid role: ${roleToUse}. Supported roles: customer, admin, employee, partner`,
+          error_code: 'INVALID_ROLE'
+        }]);
+      }
+
+      console.log(`[Admin] Using role: ${roleToUse} (from request: ${role || 'not provided'}, existing: ${existingUser.role || 'none'})`);
 
       // Update user in users table
       const now = new Date().toISOString();
@@ -1128,6 +1163,10 @@ class AdminController {
       if (username) userUpdateData.username = username;
       if (mobile_number !== undefined) userUpdateData.mobile_number = mobile_number || null;
       if (password && password !== '') userUpdateData.password_hash = password; // Only update if password provided
+      // Update role if provided in request body and different from existing
+      if (role && roleToUse !== existingUser.role?.toLowerCase()) {
+        userUpdateData.role = roleToUse;
+      }
       // Update status field - allow null, empty string, or valid enum values
       if (status !== undefined) {
         userUpdateData.status = (status === null || status === '') ? null : status;
@@ -1147,10 +1186,11 @@ class AdminController {
 
       console.log('[Admin] User update data:', JSON.stringify(userUpdateData, null, 2));
 
-      const { error: userUpdateError } = await supabase
+      const { data: updatedUsers, error: userUpdateError } = await supabase
         .from('users')
         .update(userUpdateData)
-        .eq('user_id', user_id);
+        .eq('user_id', user_id)
+        .select();
 
       if (userUpdateError) {
         logger.logDatabaseError(userUpdateError, 'UPDATE', 'users', {
@@ -1172,8 +1212,42 @@ class AdminController {
         }]);
       }
 
-      // Update role-specific record
-      if (normalizedRole === 'employee') {
+      if (!updatedUsers || updatedUsers.length === 0) {
+        console.warn('[Admin] User update completed but no rows were updated for user_id:', user_id);
+      } else {
+        console.log('[Admin] ✓ Successfully updated users table for user_id:', user_id);
+      }
+
+      // Update role-specific record based on role from request body (or existing role)
+      if (roleToUse === 'employee') {
+        // Check if employee record exists - DO NOT CREATE, only update existing
+        const { data: existingEmployee, error: employeeCheckError } = await supabase
+          .from('employees')
+          .select('employee_id, user_id')
+          .eq('user_id', user_id)
+          .maybeSingle();
+
+        if (employeeCheckError) {
+          logger.logDatabaseError(employeeCheckError, 'SELECT', 'employees', {
+            query: 'Checking if employee exists',
+            user_id: user_id
+          });
+          return res.status(500).json([{
+            status: 'error',
+            message: 'Failed to check employee record',
+            error_code: 'EMPLOYEE_CHECK_ERROR',
+            error: employeeCheckError.message
+          }]);
+        }
+
+        if (!existingEmployee) {
+          return res.status(404).json([{
+            status: 'error',
+            message: `Employee record not found for user_id: ${user_id}. Please create the employee record first.`,
+            error_code: 'EMPLOYEE_NOT_FOUND'
+          }]);
+        }
+
         const employeeUpdateData = {
           updated_time: now
         };
@@ -1194,10 +1268,11 @@ class AdminController {
         if (employment_status !== undefined) employeeUpdateData.employment_status = employment_status || null;
         if (pan !== undefined) employeeUpdateData.pan_number = pan || null;
 
-        const { error: employeeUpdateError } = await supabase
+        const { data: updatedEmployee, error: employeeUpdateError } = await supabase
           .from('employees')
           .update(employeeUpdateData)
-          .eq('user_id', user_id);
+          .eq('user_id', user_id)
+          .select();
 
         if (employeeUpdateError) {
           logger.logDatabaseError(employeeUpdateError, 'UPDATE', 'employees', {
@@ -1218,7 +1293,41 @@ class AdminController {
             error: employeeUpdateError.message
           }]);
         }
-      } else if (normalizedRole === 'partner') {
+
+        if (!updatedEmployee || updatedEmployee.length === 0) {
+          console.warn('[Admin] Employee update completed but no rows were updated for user_id:', user_id);
+        } else {
+          console.log('[Admin] ✓ Successfully updated employees table for user_id:', user_id, 'Updated employee_id:', updatedEmployee[0]?.employee_id);
+        }
+      } else if (roleToUse === 'partner') {
+        // Check if partner record exists - DO NOT CREATE, only update existing
+        const { data: existingPartner, error: partnerCheckError } = await supabase
+          .from('partners')
+          .select('partner_id, user_id')
+          .eq('user_id', user_id)
+          .maybeSingle();
+
+        if (partnerCheckError) {
+          logger.logDatabaseError(partnerCheckError, 'SELECT', 'partners', {
+            query: 'Checking if partner exists',
+            user_id: user_id
+          });
+          return res.status(500).json([{
+            status: 'error',
+            message: 'Failed to check partner record',
+            error_code: 'PARTNER_CHECK_ERROR',
+            error: partnerCheckError.message
+          }]);
+        }
+
+        if (!existingPartner) {
+          return res.status(404).json([{
+            status: 'error',
+            message: `Partner record not found for user_id: ${user_id}. Please create the partner record first.`,
+            error_code: 'PARTNER_NOT_FOUND'
+          }]);
+        }
+
         const partnerUpdateData = {
           updated_at: now
         };
@@ -1246,10 +1355,11 @@ class AdminController {
           if (address !== undefined) partnerUpdateData.address = address || null;
         }
 
-        const { error: partnerUpdateError } = await supabase
+        const { data: updatedPartner, error: partnerUpdateError } = await supabase
           .from('partners')
           .update(partnerUpdateData)
-          .eq('user_id', user_id);
+          .eq('user_id', user_id)
+          .select();
 
         if (partnerUpdateError) {
           logger.logDatabaseError(partnerUpdateError, 'UPDATE', 'partners', {
@@ -1270,42 +1380,114 @@ class AdminController {
             error: partnerUpdateError.message
           }]);
         }
-      } else if (normalizedRole === 'customer') {
+
+        if (!updatedPartner || updatedPartner.length === 0) {
+          console.warn('[Admin] Partner update completed but no rows were updated for user_id:', user_id);
+        } else {
+          console.log('[Admin] ✓ Successfully updated partners table for user_id:', user_id, 'Updated partner_id:', updatedPartner[0]?.partner_id);
+        }
+      } else if (roleToUse === 'customer') {
         const customerUpdateData = {
           updated_time: now
         };
 
-        // Handle customer_details object or direct fields
+        // Direct fields take precedence (merge with customer_details)
+        // First, add direct fields from request body (convert empty strings to null)
+        if (first_name !== undefined) customerUpdateData.first_name = (first_name && first_name.trim() !== '') ? first_name.trim() : null;
+        if (last_name !== undefined) customerUpdateData.last_name = (last_name && last_name.trim() !== '') ? last_name.trim() : null;
+        if (mobile_number !== undefined) customerUpdateData.mobile_number = (mobile_number && mobile_number.trim() !== '') ? mobile_number.trim() : null;
+        if (emergency_contact !== undefined) customerUpdateData.emergency_contact = (emergency_contact && emergency_contact.trim() !== '') ? emergency_contact.trim() : null;
+        if (gender !== undefined) customerUpdateData.gender = (gender && gender.trim() !== '') ? gender.trim() : null;
+        if (age !== undefined) customerUpdateData.age = (age && age !== '') ? String(age) : null;
+        if (address !== undefined) customerUpdateData.address = (address && address.trim() !== '') ? address.trim() : null;
+
+        // Then merge customer_details fields (only if not already set by direct fields)
         if (customer_details) {
-          if (customer_details.first_name !== undefined) customerUpdateData.first_name = customer_details.first_name;
-          if (customer_details.last_name !== undefined) customerUpdateData.last_name = customer_details.last_name;
-          if (customer_details.customer_type !== undefined) customerUpdateData.customer_type = customer_details.customer_type || null;
-          if (customer_details.company_name !== undefined) customerUpdateData.company_name = customer_details.company_name || null;
-          if (customer_details.source !== undefined) customerUpdateData.source = customer_details.source || null;
-          if (customer_details.communication_preference !== undefined) customerUpdateData.communication_preferences = customer_details.communication_preference || null;
-          if (customer_details.language_preference !== undefined) customerUpdateData.language_preference = customer_details.language_preference || null;
-          if (customer_details.partner_id !== undefined) customerUpdateData.partner_id = customer_details.partner_id || null;
-          if (customer_details.notes !== undefined) customerUpdateData.notes = customer_details.notes || null;
-          if (customer_details.gstin !== undefined) customerUpdateData.gstin = customer_details.gstin || null;
-          if (customer_details.pan !== undefined) customerUpdateData.pan = customer_details.pan || null;
-          if (customer_details.state !== undefined) customerUpdateData.state = customer_details.state || null;
-          if (customer_details.pincode !== undefined) customerUpdateData.pincode = customer_details.pincode || null;
-          if (customer_details.created_by !== undefined) customerUpdateData.created_by = customer_details.created_by || null;
-          if (customer_details.updated_by !== undefined) customerUpdateData.updated_by = customer_details.updated_by || null;
-        } else {
-          if (first_name) customerUpdateData.first_name = first_name;
-          if (last_name) customerUpdateData.last_name = last_name;
-          if (mobile_number !== undefined) customerUpdateData.mobile_number = mobile_number || null;
-          if (emergency_contact !== undefined) customerUpdateData.emergency_contact = emergency_contact || null;
-          if (gender) customerUpdateData.gender = gender;
-          if (age !== undefined) customerUpdateData.age = age ? String(age) : null;
-          if (address !== undefined) customerUpdateData.address = address || null;
+          if (customer_details.first_name !== undefined && first_name === undefined) {
+            customerUpdateData.first_name = (customer_details.first_name && customer_details.first_name.trim() !== '') ? customer_details.first_name.trim() : null;
+          }
+          if (customer_details.last_name !== undefined && last_name === undefined) {
+            customerUpdateData.last_name = (customer_details.last_name && customer_details.last_name.trim() !== '') ? customer_details.last_name.trim() : null;
+          }
+          if (customer_details.customer_type !== undefined) {
+            customerUpdateData.customer_type = (customer_details.customer_type && customer_details.customer_type.trim() !== '') ? customer_details.customer_type.trim() : null;
+          }
+          if (customer_details.company_name !== undefined) {
+            customerUpdateData.company_name = (customer_details.company_name && customer_details.company_name.trim() !== '') ? customer_details.company_name.trim() : null;
+          }
+          if (customer_details.source !== undefined) {
+            customerUpdateData.source = (customer_details.source && customer_details.source.trim() !== '') ? customer_details.source.trim() : null;
+          }
+          if (customer_details.communication_preference !== undefined) {
+            customerUpdateData.communication_preferences = (customer_details.communication_preference && customer_details.communication_preference.trim() !== '') ? customer_details.communication_preference.trim() : null;
+          }
+          if (customer_details.language_preference !== undefined) {
+            customerUpdateData.language_preference = (customer_details.language_preference && customer_details.language_preference.trim() !== '') ? customer_details.language_preference.trim() : null;
+          }
+          if (customer_details.partner_id !== undefined) {
+            const partnerId = (customer_details.partner_id === '' || customer_details.partner_id === null) ? null : customer_details.partner_id;
+            customerUpdateData.partner_id = partnerId ? parseInt(partnerId) : null;
+          }
+          if (customer_details.notes !== undefined) {
+            customerUpdateData.notes = (customer_details.notes && customer_details.notes.trim() !== '') ? customer_details.notes.trim() : null;
+          }
+          if (customer_details.gstin !== undefined) {
+            customerUpdateData.gstin = (customer_details.gstin && customer_details.gstin.trim() !== '') ? customer_details.gstin.trim() : null;
+          }
+          if (customer_details.pan !== undefined) {
+            customerUpdateData.pan = (customer_details.pan && customer_details.pan.trim() !== '') ? customer_details.pan.trim() : null;
+          }
+          if (customer_details.state !== undefined) {
+            customerUpdateData.state = (customer_details.state && customer_details.state.trim() !== '') ? customer_details.state.trim() : null;
+          }
+          if (customer_details.pincode !== undefined) {
+            customerUpdateData.pincode = (customer_details.pincode && customer_details.pincode.trim() !== '') ? customer_details.pincode.trim() : null;
+          }
+          if (customer_details.created_by !== undefined) {
+            const createdBy = (customer_details.created_by === '' || customer_details.created_by === null) ? null : customer_details.created_by;
+            customerUpdateData.created_by = createdBy ? parseInt(createdBy) : null;
+          }
+          if (customer_details.updated_by !== undefined) {
+            const updatedBy = (customer_details.updated_by === '' || customer_details.updated_by === null) ? null : customer_details.updated_by;
+            customerUpdateData.updated_by = updatedBy ? parseInt(updatedBy) : null;
+          }
         }
 
-        const { error: customerUpdateError } = await supabase
+        console.log('[Admin] Customer update data:', JSON.stringify(customerUpdateData, null, 2));
+
+        // Check if customer record exists
+        const { data: existingCustomer, error: customerCheckError } = await supabase
+          .from('customers')
+          .select('customer_id, user_id')
+          .eq('user_id', user_id)
+          .maybeSingle();
+
+        if (customerCheckError) {
+          logger.logDatabaseError(customerCheckError, 'SELECT', 'customers', {
+            query: 'Checking if customer exists',
+            user_id: user_id
+          });
+          return res.status(500).json([{
+            status: 'error',
+            message: 'Failed to check customer record',
+            error_code: 'CUSTOMER_CHECK_ERROR',
+            error: customerCheckError.message
+          }]);
+        }
+
+        if (!existingCustomer) {
+          return res.status(404).json([{
+            status: 'error',
+            message: `Customer record not found for user_id: ${user_id}. Please create the customer record first.`,
+            error_code: 'CUSTOMER_NOT_FOUND'
+          }]);
+        }
+
+        const { data: updatedCustomer, error: customerUpdateError } = await supabase
           .from('customers')
           .update(customerUpdateData)
-          .eq('user_id', user_id);
+          .eq('user_id', user_id)
+          .select();
 
         if (customerUpdateError) {
           logger.logDatabaseError(customerUpdateError, 'UPDATE', 'customers', {
@@ -1326,7 +1508,41 @@ class AdminController {
             error: customerUpdateError.message
           }]);
         }
-      } else if (normalizedRole === 'admin') {
+
+        if (!updatedCustomer || updatedCustomer.length === 0) {
+          console.warn('[Admin] Customer update completed but no rows were updated for user_id:', user_id);
+        } else {
+          console.log('[Admin] ✓ Successfully updated customers table for user_id:', user_id, 'Updated customer_id:', updatedCustomer[0]?.customer_id);
+        }
+      } else if (roleToUse === 'admin') {
+        // Check if admin record exists - DO NOT CREATE, only update existing
+        const { data: existingAdmin, error: adminCheckError } = await supabase
+          .from('admin')
+          .select('admin_id, user_id')
+          .eq('user_id', user_id)
+          .maybeSingle();
+
+        if (adminCheckError) {
+          logger.logDatabaseError(adminCheckError, 'SELECT', 'admin', {
+            query: 'Checking if admin exists',
+            user_id: user_id
+          });
+          return res.status(500).json([{
+            status: 'error',
+            message: 'Failed to check admin record',
+            error_code: 'ADMIN_CHECK_ERROR',
+            error: adminCheckError.message
+          }]);
+        }
+
+        if (!existingAdmin) {
+          return res.status(404).json([{
+            status: 'error',
+            message: `Admin record not found for user_id: ${user_id}. Please create the admin record first.`,
+            error_code: 'ADMIN_NOT_FOUND'
+          }]);
+        }
+
         const adminUpdateData = {
           updated_at: now
         };
@@ -1339,10 +1555,11 @@ class AdminController {
         if (age !== undefined) adminUpdateData.age = age ? parseInt(age) : null;
         if (address !== undefined) adminUpdateData.address = address || null;
 
-        const { error: adminUpdateError } = await supabase
+        const { data: updatedAdmin, error: adminUpdateError } = await supabase
           .from('admin')
           .update(adminUpdateData)
-          .eq('user_id', user_id);
+          .eq('user_id', user_id)
+          .select();
 
         if (adminUpdateError) {
           logger.logDatabaseError(adminUpdateError, 'UPDATE', 'admin', {
@@ -1363,6 +1580,12 @@ class AdminController {
             error: adminUpdateError.message
           }]);
         }
+
+        if (!updatedAdmin || updatedAdmin.length === 0) {
+          console.warn('[Admin] Admin update completed but no rows were updated for user_id:', user_id);
+        } else {
+          console.log('[Admin] ✓ Successfully updated admin table for user_id:', user_id, 'Updated admin_id:', updatedAdmin[0]?.admin_id);
+        }
       }
 
       // Fetch updated user to return complete data including status
@@ -1380,6 +1603,7 @@ class AdminController {
           user_id: user_id,
           updated_time: now,
           status: updatedUser?.status || null,
+          role: roleToUse,
           ...(updatedUser || {})
         }
       }]);
